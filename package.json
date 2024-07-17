@@ -18,6 +18,14 @@
   "files": [
     "/dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/simliai/simli-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/simliai/simli-client/issues"
+  },
+  "homepage": "https://github.com/simliai/simli-client#readme",
   "devDependencies": {
     "@types/node": "^20.14.11",
     "@types/react": "^18.3.3",
