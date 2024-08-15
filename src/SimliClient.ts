@@ -18,6 +18,12 @@ export class SimliClient {
     private videoRef: React.RefObject<HTMLVideoElement> | null = null;
     private audioRef: React.RefObject<HTMLAudioElement> | null = null;
 
+    constructor() {
+        if (typeof window !== 'undefined') {
+            window.addEventListener('beforeunload', this.handleBeforeUnload);
+        }
+    }
+
     public Initialize(config: SimliClientConfig) {
         this.apiKey = config.apiKey;
         this.faceID = config.faceID;
@@ -78,7 +84,7 @@ export class SimliClient {
 
     async start() {
         await this.createPeerConnection();
-        
+
         const parameters = { ordered: true };
         this.dc = this.pc!.createDataChannel('chat', parameters);
 
@@ -160,7 +166,7 @@ export class SimliClient {
         try {
             const offer = await this.pc.createOffer();
             await this.pc.setLocalDescription(offer);
-            
+
             await this.waitForIceGathering();
 
             const localDescription = this.pc.localDescription;
@@ -212,16 +218,36 @@ export class SimliClient {
     }
 
     close() {
+        // close data channel
         if (this.dc) {
             this.dc.close();
         }
 
-        if (this.pc) {
-            this.pc.close();
+        // close transceivers
+        if (this.pc?.getTransceivers) {
+            this.pc.getTransceivers().forEach((transceiver) => {
+                if (transceiver.stop) {
+                    transceiver.stop();
+                }
+            });
         }
 
-        if (this.dcInterval) {
-            clearInterval(this.dcInterval);
-        }
+        // close local audio / video
+        this.pc?.getSenders().forEach((sender) => {
+            sender.track?.stop();
+        });
+
+        // close peer connection
+        setTimeout(() => {
+            this.pc?.close();
+        }, 500);
     }
+
+    private handleBeforeUnload = (event: BeforeUnloadEvent) => {
+        this.close();
+        // Uncomment the following line if you want to show a confirmation dialog
+        // event.preventDefault(); // Cancel the event
+        // event.returnValue = ''; // Chrome requires returnValue to be set
+    }
+
 }
