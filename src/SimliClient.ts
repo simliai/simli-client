@@ -40,6 +40,7 @@ export class SimliClient {
         const config: RTCConfiguration = {
             iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }],
         };
+        console.log("Server running: ", config.iceServers);
 
         this.pc = new window.RTCPeerConnection(config);
 
@@ -89,8 +90,9 @@ export class SimliClient {
         this.dc = this.pc!.createDataChannel('chat', parameters);
 
         this.setupDataChannelListeners();
+        this.pc?.addTransceiver("audio", { direction: "recvonly" });
+        this.pc?.addTransceiver("video", { direction: "recvonly" });
 
-        await this.getUserMedia();
         await this.negotiate();
     }
 
@@ -139,22 +141,6 @@ export class SimliClient {
             this.dc?.send(resJSON.session_token);
         } catch (error) {
             console.error("Failed to initialize session:", error);
-        }
-    }
-
-    private async getUserMedia() {
-        const constraints: MediaStreamConstraints = {
-            audio: true,
-            video: true,
-        };
-
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            stream.getTracks().forEach((track) => {
-                this.pc?.addTrack(track, stream);
-            });
-        } catch (err) {
-            console.error('Could not acquire media:', err);
         }
     }
 
