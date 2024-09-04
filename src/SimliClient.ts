@@ -105,6 +105,7 @@ export class SimliClient extends EventEmitter {
         this.dc.addEventListener('close', () => {
             console.log("Data channel closed");
             this.emit('disconnected');
+            this.stopDataChannelInterval();
         });
         
         this.dc.addEventListener('open', async () => {
@@ -112,16 +113,42 @@ export class SimliClient extends EventEmitter {
             this.emit('connected');
             await this.initializeSession();
 
-            this.dcInterval = setInterval(() => {
-                const message = 'ping ' + Date.now();
-                console.log('Sending: ' + message);
-                this.dc?.send(message);
-            }, 1000);
+            this.startDataChannelInterval();
         });
 
         this.dc.addEventListener('message', (evt) => {
             console.log("Received message: ", evt.data);
         });
+    }
+
+    private startDataChannelInterval() {
+        this.stopDataChannelInterval(); // Clear any existing interval
+        this.dcInterval = setInterval(() => {
+            this.sendPingMessage();
+        }, 1000);
+    }
+
+    private stopDataChannelInterval() {
+        if (this.dcInterval) {
+            clearInterval(this.dcInterval);
+            this.dcInterval = null;
+        }
+    }
+
+    private sendPingMessage() {
+        if (this.dc && this.dc.readyState === 'open') {
+            const message = 'ping ' + Date.now();
+            console.log('Sending: ' + message);
+            try {
+                this.dc.send(message);
+            } catch (error) {
+                console.error('Failed to send message:', error);
+                this.stopDataChannelInterval();
+            }
+        } else {
+            console.warn('Data channel is not open. Current state:', this.dc?.readyState);
+            this.stopDataChannelInterval();
+        }
     }
 
     private async initializeSession() {
@@ -143,10 +170,15 @@ export class SimliClient extends EventEmitter {
             });
 
             const resJSON = await response.json();
-            this.dc?.send(resJSON.session_token);
+            if (this.dc && this.dc.readyState === 'open') {
+                this.dc.send(resJSON.session_token);
+            } else {
+                this.emit('failed');
+                console.error("Data channel not open when trying to send session token");
+            }
         } catch (error) {
-            console.error("Failed to initialize session:", error);
             this.emit('failed');
+            console.error("Failed to initialize session:", error);
         }
     }
 
@@ -211,14 +243,19 @@ export class SimliClient extends EventEmitter {
 
     sendAudioData(audioData: Uint8Array) {
         if (this.dc && this.dc.readyState === "open") {
-            this.dc.send(audioData);
+            try {
+                this.dc.send(audioData);
+            } catch (error) {
+                console.error("Failed to send audio data:", error);
+            }
         } else {
-            console.error("Data channel is not open");
+            console.error("Data channel is not open. Current state:", this.dc?.readyState);
         }
     }
 
     close() {
         this.emit('disconnected');
+        this.stopDataChannelInterval();
 
         // close data channel
         if (this.dc) {
@@ -251,5 +288,4 @@ export class SimliClient extends EventEmitter {
         // event.preventDefault(); // Cancel the event
         // event.returnValue = ''; // Chrome requires returnValue to be set
     }
-
 }
