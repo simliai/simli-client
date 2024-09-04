@@ -24,6 +24,7 @@ export class SimliClient extends EventEmitter {
         super();
         if (typeof window !== 'undefined') {
             window.addEventListener('beforeunload', this.handleBeforeUnload);
+            window.addEventListener('pagehide', this.handlePageHide);
         }
     }
 
@@ -277,15 +278,28 @@ export class SimliClient extends EventEmitter {
         });
 
         // close peer connection
-        setTimeout(() => {
-            this.pc?.close();
-        }, 500);
+        this.pc?.close();
+
+        // Cleanup
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('beforeunload', this.handleBeforeUnload);
+            window.removeEventListener('pagehide', this.handlePageHide);
+        }
     }
 
     private handleBeforeUnload = (event: BeforeUnloadEvent) => {
         this.close();
-        // Uncomment the following line if you want to show a confirmation dialog
-        // event.preventDefault(); // Cancel the event
-        // event.returnValue = ''; // Chrome requires returnValue to be set
+        event.preventDefault();
+        event.returnValue = '';
+    }
+
+    private handlePageHide = (event: PageTransitionEvent) => {
+        if (event.persisted) {
+            // The page is being cached for bfcache
+            this.close();
+        } else {
+            // The page is being unloaded
+            this.close();
+        }
     }
 }
