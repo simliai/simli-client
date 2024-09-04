@@ -1,3 +1,5 @@
+import { EventEmitter } from 'events';
+
 export interface SimliClientConfig {
     apiKey: string;
     faceID: string;
@@ -6,7 +8,7 @@ export interface SimliClientConfig {
     audioRef: React.RefObject<HTMLAudioElement>;
 };
 
-export class SimliClient {
+export class SimliClient extends EventEmitter {
     private pc: RTCPeerConnection | null = null;
     private dc: RTCDataChannel | null = null;
     private dcInterval: NodeJS.Timeout | null = null;
@@ -19,6 +21,7 @@ export class SimliClient {
     private audioRef: React.RefObject<HTMLAudioElement> | null = null;
 
     constructor() {
+        super();
         if (typeof window !== 'undefined') {
             window.addEventListener('beforeunload', this.handleBeforeUnload);
         }
@@ -101,10 +104,12 @@ export class SimliClient {
 
         this.dc.addEventListener('close', () => {
             console.log("Data channel closed");
+            this.emit('disconnected');
         });
-
+        
         this.dc.addEventListener('open', async () => {
             console.log("Data channel opened");
+            this.emit('connected');
             await this.initializeSession();
 
             this.dcInterval = setInterval(() => {
@@ -141,6 +146,7 @@ export class SimliClient {
             this.dc?.send(resJSON.session_token);
         } catch (error) {
             console.error("Failed to initialize session:", error);
+            this.emit('failed');
         }
     }
 
@@ -174,6 +180,7 @@ export class SimliClient {
             await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
         } catch (e) {
             console.error("Negotiation failed:", e);
+            this.emit('failed');
         }
     }
 
@@ -184,14 +191,21 @@ export class SimliClient {
             return;
         }
 
-        await new Promise<void>((resolve) => {
-            const checkState = () => {
-                if (this.pc?.iceGatheringState === 'complete') {
-                    this.pc.removeEventListener('icegatheringstatechange', checkState);
+        return new Promise<void>((resolve) => {
+            const checkIceCandidates = () => {
+                if (
+                    this.pc?.iceGatheringState === 'complete' ||
+                    this.candidateCount === this.prevCandidateCount
+                ) {
+                    console.log(this.pc?.iceGatheringState, this.candidateCount);
                     resolve();
+                } else {
+                    this.prevCandidateCount = this.candidateCount;
+                    setTimeout(checkIceCandidates, 250);
                 }
-            }
-            this.pc?.addEventListener('icegatheringstatechange', checkState);
+            };
+
+            checkIceCandidates();
         });
     }
 
@@ -204,6 +218,8 @@ export class SimliClient {
     }
 
     close() {
+        this.emit('disconnected');
+
         // close data channel
         if (this.dc) {
             this.dc.close();
