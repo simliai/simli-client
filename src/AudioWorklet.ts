@@ -4,7 +4,7 @@ export const AudioProcessor =  `
             super();
             this.buffer = new Int16Array(${3000});
             this.bufferIndex = 0;
-          }
+        }
 
           process(inputs, outputs, parameters) {
             const input = inputs[0];
@@ -14,7 +14,7 @@ export const AudioProcessor =  `
                 this.buffer[this.bufferIndex] = Math.max(-32768, Math.min(32767, Math.round(inputChannel[i] * 32767)));
                 this.bufferIndex++;
                 
-                if (this.bufferIndex === this.buffer.length)){
+                if (this.bufferIndex === this.buffer.length){
                   this.port.postMessage({type: 'audioData', data: this.buffer.slice(0, this.bufferIndex)});
                   this.bufferIndex = 0;
                 }

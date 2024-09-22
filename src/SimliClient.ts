@@ -283,30 +283,31 @@ export class SimliClient extends EventEmitter {
   }
 
   
-  async listenToMediastreamTrack(stream: MediaStreamTrack) {
+  listenToMediastreamTrack(stream: MediaStreamTrack) {
     this.inputStreamTrack = stream;
     const audioContext: AudioContext = new (window.AudioContext ||
       (window as any).webkitAudioContext)({
-        sampleRate: 16000,
-        
-      }); 
-    await this.initializeAudioWorklet(audioContext);
-    this.sourceNode = audioContext.createMediaStreamSource(new MediaStream([stream]));
-    if (this.audioWorklet===null){
-      throw new Error("AudioWorklet not initialized");
-    }
-    this.sourceNode.connect(this.audioWorklet);
-    this.audioWorklet.port.onmessage = (event) => {
-     if (event.data.type === "audioData") {
-          this.sendAudioData(new Uint8Array(event.data.data.buffer));
-        } 
-    }
-  }
+      sampleRate: 16000,
+    });
+    this.initializeAudioWorklet(audioContext,stream);
+      }
 
-  private async initializeAudioWorklet(audioContext: AudioContext) {
-    await audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([AudioProcessor], { type: 'application/javascript' })));
-    this.audioWorklet = new AudioWorkletNode(audioContext, 'audio-processor');
-    
+  private initializeAudioWorklet(audioContext: AudioContext, stream: MediaStreamTrack) {
+    audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([AudioProcessor], { type: 'application/javascript' }))).then(
+      () => {
+        this.audioWorklet = new AudioWorkletNode(audioContext, 'audio-processor');
+        this.sourceNode = audioContext.createMediaStreamSource(new MediaStream([stream]));
+        if (this.audioWorklet===null){
+          throw new Error("AudioWorklet not initialized");
+        }
+        this.sourceNode.connect(this.audioWorklet);
+        this.audioWorklet.port.onmessage = (event) => {
+          if (event.data.type === "audioData") {
+            this.sendAudioData(new Uint8Array(event.data.data.buffer));
+          } 
+        }
+    });
+
   }
 
   sendAudioData(audioData: Uint8Array) {
