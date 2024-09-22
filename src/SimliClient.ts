@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-
+import {AudioProcessor} from './AudioWorklet';
 export interface SimliClientConfig {
   apiKey: string;
   faceID: string;
@@ -21,6 +21,10 @@ export class SimliClient extends EventEmitter {
   private audioRef: React.RefObject<HTMLAudioElement> | null = null;
   private errorReason: string | null = null;
   private sessionInitialized: boolean = false;
+  private inputStreamTrack : MediaStreamTrack | null = null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private audioWorklet: AudioWorkletNode | null = null;
+  private audioBuffer: Int16Array | null = null;
   constructor() {
     super();
     if (typeof window !== "undefined") {
@@ -276,6 +280,33 @@ export class SimliClient extends EventEmitter {
 
       checkIceCandidates();
     });
+  }
+
+  
+  async listenToMediastreamTrack(stream: MediaStreamTrack) {
+    this.inputStreamTrack = stream;
+    const audioContext: AudioContext = new (window.AudioContext ||
+      (window as any).webkitAudioContext)({
+        sampleRate: 16000,
+        
+      }); 
+    await this.initializeAudioWorklet(audioContext);
+    this.sourceNode = audioContext.createMediaStreamSource(new MediaStream([stream]));
+    if (this.audioWorklet===null){
+      throw new Error("AudioWorklet not initialized");
+    }
+    this.sourceNode.connect(this.audioWorklet);
+    this.audioWorklet.port.onmessage = (event) => {
+     if (event.data.type === "audioData") {
+          this.sendAudioData(new Uint8Array(event.data.data.buffer));
+        } 
+    }
+  }
+
+  private async initializeAudioWorklet(audioContext: AudioContext) {
+    await audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([AudioProcessor], { type: 'application/javascript' })));
+    this.audioWorklet = new AudioWorkletNode(audioContext, 'audio-processor');
+    
   }
 
   sendAudioData(audioData: Uint8Array) {
