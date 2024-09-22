@@ -124,6 +124,10 @@ export class SimliClient extends EventEmitter {
     });
 
     this.dc.addEventListener("message", (evt) => {
+      if (evt.data === "START") 
+      {
+       this.sessionInitialized = true; 
+      }
       console.log("Received message: ", evt.data);
     });
   }
@@ -275,9 +279,15 @@ export class SimliClient extends EventEmitter {
   }
 
   sendAudioData(audioData: Uint8Array) {
+
     if (this.dc && this.dc.readyState === "open") {
       try {
-        this.dc.send(audioData);
+        if (this.sessionInitialized){
+          this.dc.send(audioData);
+        }
+        else{
+          console.log("Data channel open but session is being initialized. Ignoring audio data.");
+        }
       } catch (error) {
         console.error("Failed to send audio data:", error);
       }
