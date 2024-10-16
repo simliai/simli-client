@@ -27,8 +27,8 @@ export class SimliClient extends EventEmitter {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private audioWorklet: AudioWorkletNode | null = null;
   private audioBuffer: Int16Array | null = null;
-  private maxSessionLength: number = 360000;
-  private maxIdleTime: number = 60000;
+  private maxSessionLength: number = 3600;
+  private maxIdleTime: number = 600;
   constructor() {
     super();
     if (typeof window !== "undefined") {
