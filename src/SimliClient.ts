@@ -1,9 +1,11 @@
 import { EventEmitter } from "events";
-import { AudioProcessor } from './AudioWorklet';
+import { AudioProcessor } from "./AudioWorklet";
 export interface SimliClientConfig {
   apiKey: string;
   faceID: string;
   handleSilence: boolean;
+  maxSessionLength: number;
+  maxIdleTime: number;
   videoRef: React.RefObject<HTMLVideoElement>;
   audioRef: React.RefObject<HTMLAudioElement>;
 }
@@ -25,6 +27,8 @@ export class SimliClient extends EventEmitter {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private audioWorklet: AudioWorkletNode | null = null;
   private audioBuffer: Int16Array | null = null;
+  private maxSessionLength: number = 360000;
+  private maxIdleTime: number = 60000;
   constructor() {
     super();
     if (typeof window !== "undefined") {
@@ -37,6 +41,8 @@ export class SimliClient extends EventEmitter {
     this.apiKey = config.apiKey;
     this.faceID = config.faceID;
     this.handleSilence = config.handleSilence;
+    this.maxSessionLength = config.maxSessionLength;
+    this.maxIdleTime = config.maxIdleTime;
     if (typeof window !== "undefined") {
       this.videoRef = config.videoRef;
       this.audioRef = config.audioRef;
@@ -178,6 +184,8 @@ export class SimliClient extends EventEmitter {
       apiKey: this.apiKey,
       syncAudio: true,
       handleSilence: this.handleSilence,
+      maxSessionLength: this.maxSessionLength,
+      maxIdleTime: this.maxIdleTime,
     };
 
     try {
@@ -197,9 +205,14 @@ export class SimliClient extends EventEmitter {
         this.dc.send(resJSON.session_token);
       } else {
         this.emit("failed");
-        this.errorReason = "Session Init failed: Simli API returned Code:" + response.status + "\n" + JSON.stringify(resJSON);
+        this.errorReason =
+          "Session Init failed: Simli API returned Code:" +
+          response.status +
+          "\n" +
+          JSON.stringify(resJSON);
         console.error(
-          "Data channel not open when trying to send session token " + this.errorReason
+          "Data channel not open when trying to send session token " +
+            this.errorReason
         );
         await this.pc?.close();
       }
@@ -208,7 +221,6 @@ export class SimliClient extends EventEmitter {
       this.errorReason = "Session Init failed: :" + error;
       console.error("Failed to initialize session:", error);
       await this.pc?.close();
-
     }
   }
 
@@ -240,7 +252,11 @@ export class SimliClient extends EventEmitter {
       if (response.status !== 200) {
         this.emit("failed");
         const text = await response.text();
-        this.errorReason = "Negotiation failed: Simli API returned Code:" + response.status + "\n" + text;
+        this.errorReason =
+          "Negotiation failed: Simli API returned Code:" +
+          response.status +
+          "\n" +
+          text;
         console.error("Failed to negotiate:", response.status, text);
         this.pc?.close();
         return;
@@ -281,7 +297,6 @@ export class SimliClient extends EventEmitter {
     });
   }
 
-
   listenToMediastreamTrack(stream: MediaStreamTrack) {
     if (this.sessionInitialized === false) {
       console.log("Session not initialized. Ignoring audio data.");
@@ -291,16 +306,29 @@ export class SimliClient extends EventEmitter {
     this.inputStreamTrack = stream;
     const audioContext: AudioContext = new (window.AudioContext ||
       (window as any).webkitAudioContext)({
-        sampleRate: 16000,
-      });
+      sampleRate: 16000,
+    });
     this.initializeAudioWorklet(audioContext, stream);
   }
 
-  private initializeAudioWorklet(audioContext: AudioContext, stream: MediaStreamTrack) {
-    audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([AudioProcessor], { type: 'application/javascript' }))).then(
-      () => {
-        this.audioWorklet = new AudioWorkletNode(audioContext, 'audio-processor');
-        this.sourceNode = audioContext.createMediaStreamSource(new MediaStream([stream]));
+  private initializeAudioWorklet(
+    audioContext: AudioContext,
+    stream: MediaStreamTrack
+  ) {
+    audioContext.audioWorklet
+      .addModule(
+        URL.createObjectURL(
+          new Blob([AudioProcessor], { type: "application/javascript" })
+        )
+      )
+      .then(() => {
+        this.audioWorklet = new AudioWorkletNode(
+          audioContext,
+          "audio-processor"
+        );
+        this.sourceNode = audioContext.createMediaStreamSource(
+          new MediaStream([stream])
+        );
         if (this.audioWorklet === null) {
           throw new Error("AudioWorklet not initialized");
         }
@@ -309,9 +337,8 @@ export class SimliClient extends EventEmitter {
           if (event.data.type === "audioData") {
             this.sendAudioData(new Uint8Array(event.data.data.buffer));
           }
-        }
+        };
       });
-
   }
 
   sendAudioData(audioData: Uint8Array) {
@@ -324,9 +351,10 @@ export class SimliClient extends EventEmitter {
       try {
         if (this.sessionInitialized) {
           this.dc.send(audioData);
-        }
-        else {
-          console.log("Data channel open but session is being initialized. Ignoring audio data.");
+        } else {
+          console.log(
+            "Data channel open but session is being initialized. Ignoring audio data."
+          );
         }
       } catch (error) {
         console.error("Failed to send audio data:", error);
