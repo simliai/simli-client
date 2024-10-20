@@ -417,4 +417,9 @@ export class SimliClient extends EventEmitter {
       this.close();
     }
   };
+  public ClearBuffer = () => {
+    if (this.dc && this.dc.readyState === "open") {
+      this.dc.send("SKIP");
+    }
+  }
 }
