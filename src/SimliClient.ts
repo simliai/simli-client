@@ -31,10 +31,6 @@ export class SimliClient extends EventEmitter {
   private maxIdleTime: number = 600;
   constructor() {
     super();
-    if (typeof window !== "undefined") {
-      window.addEventListener("beforeunload", this.handleBeforeUnload);
-      window.addEventListener("pagehide", this.handlePageHide);
-    }
   }
 
   public Initialize(config: SimliClientConfig) {
@@ -394,29 +390,8 @@ export class SimliClient extends EventEmitter {
 
     // close peer connection
     this.pc?.close();
-
-    // Cleanup
-    if (typeof window !== "undefined") {
-      window.removeEventListener("beforeunload", this.handleBeforeUnload);
-      window.removeEventListener("pagehide", this.handlePageHide);
-    }
   }
 
-  private handleBeforeUnload = (event: BeforeUnloadEvent) => {
-    this.close();
-    event.preventDefault();
-    event.returnValue = "";
-  };
-
-  private handlePageHide = (event: PageTransitionEvent) => {
-    if (event.persisted) {
-      // The page is being cached for bfcache
-      this.close();
-    } else {
-      // The page is being unloaded
-      this.close();
-    }
-  };
   public ClearBuffer = () => {
     if (this.dc && this.dc.readyState === "open") {
       this.dc.send("SKIP");
