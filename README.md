@@ -11,9 +11,10 @@ npm install simli-client
 ### Methods
 - `Initialize(config: SimliClientConfig)`: Initializes the SimliClient with the provided configuration.
 - `start()`: Sets up the WebRTC connection and prepares for streaming.
-- `sendAudioData(audioData: Uint8Array)`: Sends audio data to the server.
-- `listenToMediastreamTrack(stream: MediaStreamTrack)`: Sends mediaStream audio data to the server
 - `close()`: Closes the WebRTC connection and cleans up resources.
+- `sendAudioData(audioData: Uint8Array)`: Sends audio data to the server.
+- `listenToMediastreamTrack(stream: MediaStreamTrack)`: Listens to a MediaStreamTrack and sends audio data to the server. *Can be used as an alternative to `sendAudioData`.*
+- `ClearBuffer()`: Clears the audio buffer, best used when you want the avatar to stop talking.
 
 ### Events
 - `connected`
