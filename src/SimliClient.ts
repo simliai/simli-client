@@ -49,9 +49,30 @@ export class SimliClient extends EventEmitter {
     }
   }
 
-  private createPeerConnection() {
+  private async getIceServers() {
+    try {
+      const response = await fetch("https://api.simli.ai/getIceServers", {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        body: JSON.stringify({
+          apiKey: this.apiKey,
+        }),
+      });
+      const iceServers = await response.json();
+
+      return iceServers;
+    } catch (error) {
+      console.error("Error fetching ICE servers:", error);
+      // Fallback to Google STUN server if fetch fails
+      return [{ urls: ["stun:stun.l.google.com:19302"] }];
+    }
+  }
+
+  private async createPeerConnection() {
     const config: RTCConfiguration = {
-      iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+      iceServers: await this.getIceServers(),
     };
     console.log("Server running: ", config.iceServers);
 
@@ -396,5 +417,5 @@ export class SimliClient extends EventEmitter {
     if (this.dc && this.dc.readyState === "open") {
       this.dc.send("SKIP");
     }
-  }
+  };
 }
