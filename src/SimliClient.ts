@@ -60,12 +60,17 @@ export class SimliClient extends EventEmitter {
           apiKey: this.apiKey,
         }),
       });
+      if (response.status != 200) {
+        console.error("error fetching ice servers");
+        // fallback to google stun server if fetch fails
+        return [{ urls: ["stun:stun.l.google.com:19302"] }];
+      }
       const iceServers = await response.json();
 
       return iceServers;
     } catch (error) {
-      console.error("Error fetching ICE servers:", error);
-      // Fallback to Google STUN server if fetch fails
+      console.error("error fetching ice servers:", error);
+      // fallback to google stun server if fetch fails
       return [{ urls: ["stun:stun.l.google.com:19302"] }];
     }
   }
@@ -229,7 +234,7 @@ export class SimliClient extends EventEmitter {
           JSON.stringify(resJSON);
         console.error(
           "Data channel not open when trying to send session token " +
-            this.errorReason
+          this.errorReason
         );
         await this.pc?.close();
       }
@@ -323,8 +328,8 @@ export class SimliClient extends EventEmitter {
     this.inputStreamTrack = stream;
     const audioContext: AudioContext = new (window.AudioContext ||
       (window as any).webkitAudioContext)({
-      sampleRate: 16000,
-    });
+        sampleRate: 16000,
+      });
     this.initializeAudioWorklet(audioContext, stream);
   }
 
