@@ -77,6 +77,7 @@ export class SimliClient extends EventEmitter {
 
   private async createPeerConnection() {
     const config: RTCConfiguration = {
+      sdpSemantics:"unified-plan",
       iceServers: await this.getIceServers(),
     };
     console.log("Server running: ", config.iceServers);
