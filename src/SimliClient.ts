@@ -31,6 +31,7 @@ export class SimliClient extends EventEmitter {
   private maxIdleTime: number = 600;
   private pingSendTimes: Map<string, number> = new Map();
   private webSocket: WebSocket | null = null;
+  private lastSendTime: number = 0;
   constructor() {
     super();
   }
@@ -254,7 +255,7 @@ export class SimliClient extends EventEmitter {
       const localDescription = this.pc.localDescription;
       if (!localDescription) return;
 
-      const ws = new WebSocket("https://api.simli.ai/StartWebRTCSession");
+      const ws = new WebSocket("wss://api.simli.ai/StartWebRTCSession");
       this.webSocket = ws;
       ws.addEventListener("open", async () => {
         await ws.send(JSON.stringify(this.pc?.localDescription))
@@ -339,7 +340,6 @@ export class SimliClient extends EventEmitter {
   }
 
   listenToMediastreamTrack(stream: MediaStreamTrack) {
-
     this.inputStreamTrack = stream;
     const audioContext: AudioContext = new (window.AudioContext ||
       (window as any).webkitAudioContext)({
@@ -387,6 +387,10 @@ export class SimliClient extends EventEmitter {
       try {
         if (this.sessionInitialized) {
           this.webSocket?.send(audioData);
+          if (this.lastSendTime !== 0) {
+            console.log("Time between sends: ", Date.now() - this.lastSendTime);
+          }
+          this.lastSendTime = Date.now();
         } else {
           console.log(
             "Data channel open but session is being initialized. Ignoring audio data."
