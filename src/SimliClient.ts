@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { AudioProcessor } from "./AudioWorklet";
+
 export interface SimliClientConfig {
   apiKey: string;
   faceID: string;
@@ -8,6 +9,12 @@ export interface SimliClientConfig {
   maxIdleTime: number;
   videoRef: React.RefObject<HTMLVideoElement>;
   audioRef: React.RefObject<HTMLAudioElement>;
+}
+
+export interface SimliClientEvents {
+  connected: () => void;
+  disconnected: () => void;
+  failed: (reason: string) => void;
 }
 
 export class SimliClient extends EventEmitter {
@@ -32,8 +39,28 @@ export class SimliClient extends EventEmitter {
   private pingSendTimes: Map<string, number> = new Map();
   private webSocket: WebSocket | null = null;
   private lastSendTime: number = 0;
+  private readonly MAX_RETRY_ATTEMPTS = 3;
+  private readonly RETRY_DELAY = 2000;
+  private connectionTimeout: NodeJS.Timeout | null = null;
+  private readonly CONNECTION_TIMEOUT_MS = 15000;
+
   constructor() {
     super();
+  }
+
+  // Add type-safe emit and on methods
+  public emit<K extends keyof SimliClientEvents>(
+    event: K,
+    ...args: Parameters<SimliClientEvents[K]>
+  ): boolean {
+    return super.emit(event, ...args);
+  }
+
+  public on<K extends keyof SimliClientEvents>(
+    event: K,
+    listener: SimliClientEvents[K]
+  ): this {
+    return super.on(event, listener);
   }
 
   public Initialize(config: SimliClientConfig) {
@@ -52,33 +79,38 @@ export class SimliClient extends EventEmitter {
     }
   }
 
-  private async getIceServers() {
+  private async getIceServers(attempt = 1): Promise<RTCIceServer[]> {
     try {
-      const response = await fetch("https://api.simli.ai/getIceServers", {
-        headers: {
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-        body: JSON.stringify({
-          apiKey: this.apiKey,
+      const response: any = await Promise.race([
+        fetch("https://api.simli.ai/getIceServers", {
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+          body: JSON.stringify({ apiKey: this.apiKey }),
         }),
-      });
-      if (response.status != 200) {
-        console.error("error fetching ice servers");
-        // fallback to google stun server if fetch fails
-        return [{ urls: ["stun:stun.l.google.com:19302"] }];
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("ICE server request timeout")), 5000)
+        ),
+      ]);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-      const responseJSON = await response.json();
-      const iceServers = responseJSON;
+
+      const iceServers = await response.json();
       if (!iceServers || iceServers.length === 0) {
-        console.error("error fetching ice servers");
-        // fallback to google stun server if fetch fails
-        return [{ urls: ["stun:stun.l.google.com:19302"] }];
+        throw new Error("No ICE servers returned");
       }
+
       return iceServers;
     } catch (error) {
-      console.error("error fetching ice servers:", error);
-      // fallback to google stun server if fetch fails
+      console.warn(`ICE servers fetch attempt ${attempt} failed:`, error);
+
+      if (attempt < this.MAX_RETRY_ATTEMPTS) {
+        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+        return this.getIceServers(attempt + 1);
+      }
+
+      console.log("Using fallback STUN server");
       return [{ urls: ["stun:stun.l.google.com:19302"] }];
     }
   }
@@ -105,10 +137,10 @@ export class SimliClient extends EventEmitter {
     });
 
     this.pc.addEventListener("iceconnectionstatechange", () => {
-      console.log(
-        "ICE connection state changed: ",
-        this.pc?.iceConnectionState
-      );
+      console.log("ICE connection state changed: ", this.pc?.iceConnectionState);
+      if (this.pc?.iceConnectionState === "failed") {
+        this.handleConnectionFailure("ICE connection failed");
+      }
     });
 
     this.pc.addEventListener("signalingstatechange", () => {
@@ -134,17 +166,65 @@ export class SimliClient extends EventEmitter {
     };
   }
 
-  async start() {
-    await this.createPeerConnection();
+  private setupConnectionStateHandler() {
+    if (!this.pc) return;
 
-    const parameters = { ordered: true };
-    this.dc = this.pc!.createDataChannel("chat", parameters);
+    this.pc.addEventListener("connectionstatechange", () => {
+      switch (this.pc?.connectionState) {
+        case "connected":
+          this.clearTimeouts();
+          break;
+        case "failed":
+        case "closed":
+          this.emit("failed", "Connection failed or closed");
+          this.cleanup();
+          break;
+        case "disconnected":
+          this.handleDisconnection();
+          break;
+      }
+    });
+  }
 
-    this.setupDataChannelListeners();
-    this.pc?.addTransceiver("audio", { direction: "recvonly" });
-    this.pc?.addTransceiver("video", { direction: "recvonly" });
+  async start(retryAttempt = 1): Promise<void> {
+    try {
+      this.clearTimeouts();
 
-    await this.negotiate();
+      // Set overall connection timeout
+      this.connectionTimeout = setTimeout(() => {
+        this.handleConnectionTimeout();
+      }, this.CONNECTION_TIMEOUT_MS);
+
+      await this.createPeerConnection();
+
+      const parameters = { ordered: true };
+      this.dc = this.pc!.createDataChannel("chat", parameters);
+
+      this.setupDataChannelListeners();
+      this.setupConnectionStateHandler();
+
+      this.pc?.addTransceiver("audio", { direction: "recvonly" });
+      this.pc?.addTransceiver("video", { direction: "recvonly" });
+
+      await this.negotiate();
+
+      // Clear timeout if connection successful
+      this.clearTimeouts();
+
+    } catch (error) {
+      console.error(`Connection attempt ${retryAttempt} failed:`, error);
+      this.clearTimeouts();
+
+      if (retryAttempt < this.MAX_RETRY_ATTEMPTS) {
+        console.log(`Retrying connection... Attempt ${retryAttempt + 1}`);
+        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+        await this.cleanup();
+        return this.start(retryAttempt + 1);
+      }
+
+      this.emit("failed", `Failed to connect after ${this.MAX_RETRY_ATTEMPTS} attempts`);
+      throw error;
+    }
   }
 
   private setupDataChannelListeners() {
@@ -154,6 +234,11 @@ export class SimliClient extends EventEmitter {
       console.log("Data channel closed");
       this.emit("disconnected");
       this.stopDataChannelInterval();
+    });
+
+    this.dc.addEventListener("error", (error) => {
+      console.error("Data channel error:", error);
+      this.handleConnectionFailure("Data channel error");
     });
   }
 
@@ -175,16 +260,16 @@ export class SimliClient extends EventEmitter {
     if (this.webSocket && this.webSocket.readyState === this.webSocket.OPEN) {
       const message = "ping " + Date.now();
       this.pingSendTimes.set(message, Date.now());
-      console.log("Sending: " + message);
       try {
         this.webSocket?.send(message);
       } catch (error) {
         console.error("Failed to send message:", error);
         this.stopDataChannelInterval();
+        this.handleConnectionFailure("Failed to send ping message");
       }
     } else {
       console.warn(
-        "Data channel is not open. Current state:",
+        "WebSocket is not open. Current state:",
         this.webSocket?.readyState
       );
       if (this.errorReason !== null) {
@@ -217,27 +302,19 @@ export class SimliClient extends EventEmitter {
         }
       );
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const resJSON = await response.json();
       if (this.webSocket && this.webSocket.readyState === this.webSocket.OPEN) {
         this.webSocket?.send(resJSON.session_token);
       } else {
-        this.emit("failed");
-        this.errorReason =
-          "Session Init failed: Simli API returned Code:" +
-          response.status +
-          "\n" +
-          JSON.stringify(resJSON);
-        console.error(
-          "Data channel not open when trying to send session token " +
-          this.errorReason
-        );
-        await this.pc?.close();
+        throw new Error("WebSocket not open when trying to send session token");
       }
     } catch (error) {
-      this.emit("failed");
-      this.errorReason = "Session Init failed: :" + error;
-      console.error("Failed to initialize session:", error);
-      await this.pc?.close();
+      this.handleConnectionFailure(`Session initialization failed: ${error}`);
+      throw error;
     }
   }
 
@@ -253,64 +330,95 @@ export class SimliClient extends EventEmitter {
       await this.waitForIceGathering();
 
       const localDescription = this.pc.localDescription;
-      if (!localDescription) return;
+      if (!localDescription) {
+        throw new Error("Local description is null");
+      }
 
       const ws = new WebSocket("wss://api.simli.ai/StartWebRTCSession");
       this.webSocket = ws;
-      ws.addEventListener("open", async () => {
-        await ws.send(JSON.stringify(this.pc?.localDescription))
-        await this.initializeSession();
 
-        this.startDataChannelInterval();
-
+      let wsConnectResolve: () => void;
+      const wsConnectPromise = new Promise<void>((resolve) => {
+        wsConnectResolve = resolve;
       });
-      let answer = null;
+
+      ws.addEventListener("open", async () => {
+        await ws.send(JSON.stringify(this.pc?.localDescription));
+        await this.initializeSession();
+        this.startDataChannelInterval();
+        wsConnectResolve();
+      });
+
+      let answer: RTCSessionDescriptionInit | null = null;
+
       ws.addEventListener("message", async (evt) => {
         console.log("Received message: ", evt.data);
-        if (evt.data === "START") {
-          this.sessionInitialized = true;
-          this.emit("connected");
-          return;
-        }
-        else if (evt.data === "STOP") {
-          stop();
-          return;
-        }
-        else if (evt.data.substring(0, 4) === "pong") {
-          const pingTime = this.pingSendTimes.get(evt.data.replace("pong", "ping"));
-          if (pingTime)
-            console.log("Simli Latency: ", Date.now() - pingTime);
-        }
-        else if (evt.data === "ACK") {
-          console.log("Received ACK");
-        }
-        else {
-          try {
+        try {
+          if (evt.data === "START") {
+            this.sessionInitialized = true;
+            this.emit("connected");
+          } else if (evt.data === "STOP") {
+            this.close();
+          } else if (evt.data.startsWith("pong")) {
+            const pingTime = this.pingSendTimes.get(evt.data.replace("pong", "ping"));
+            if (pingTime) {
+              console.log("Simli Latency: ", Date.now() - pingTime);
+            }
+          } else if (evt.data === "ACK") {
+            console.log("Received ACK");
+          } else {
             const message = JSON.parse(evt.data);
-            if (message.type && message.type === "answer") {
+            if (message.type === "answer") {
               answer = message;
             }
-
-          } catch (e) {
-            console.log(e);
           }
+        } catch (e) {
+          console.warn("Error processing WebSocket message:", e);
         }
       });
-      ws.addEventListener("close", () => {
-        console.log("Websocket closed");
-        this.emit("failed")
 
+      ws.addEventListener("error", (error) => {
+        console.error("WebSocket error:", error);
+        this.handleConnectionFailure("WebSocket error");
       });
-      while (answer === null) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      console.log(answer);
-      await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
-    } catch (e) {
-      console.error("Negotiation failed:", e);
-      this.errorReason = "Negotiation failed: " + e;
-      this.emit("failed");
-      this.pc.close();
+
+      ws.addEventListener("close", () => {
+        console.log("WebSocket closed");
+        this.handleConnectionFailure("WebSocket closed unexpectedly");
+      });
+
+      // Wait for WebSocket connection
+      await Promise.race([
+        wsConnectPromise,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000)
+        ),
+      ]);
+
+      // Wait for answer with timeout
+      let timeoutId: NodeJS.Timeout;
+      await Promise.race([
+        new Promise<void>((resolve, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("Answer timeout")), 10000);
+          const checkAnswer = async () => {
+            if (answer) {
+              await this.pc!.setRemoteDescription(new RTCSessionDescription(answer));
+              clearTimeout(timeoutId);
+              resolve();
+            } else {
+              setTimeout(checkAnswer, 100);
+            }
+          };
+          checkAnswer();
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Answer timeout")), 10000)
+        ),
+      ]);
+
+    } catch (error) {
+      this.handleConnectionFailure(`Negotiation failed: ${error}`);
+      throw error;
     }
   }
 
@@ -321,13 +429,17 @@ export class SimliClient extends EventEmitter {
       return;
     }
 
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("ICE gathering timeout"));
+      }, 10000);
+
       const checkIceCandidates = () => {
         if (
           this.pc?.iceGatheringState === "complete" ||
           this.candidateCount === this.prevCandidateCount
         ) {
-          console.log(this.pc?.iceGatheringState, this.candidateCount);
+          clearTimeout(timeout);
           resolve();
         } else {
           this.prevCandidateCount = this.candidateCount;
@@ -339,13 +451,83 @@ export class SimliClient extends EventEmitter {
     });
   }
 
+  private handleConnectionFailure(reason: string) {
+    this.errorReason = reason;
+    console.error("Connection failure:", reason);
+    this.emit("failed", reason);
+    this.cleanup();
+  }
+
+  private handleConnectionTimeout() {
+    this.handleConnectionFailure("Connection timed out");
+  }
+
+  private handleDisconnection() {
+    if (this.sessionInitialized) {
+      console.log("Connection lost, attempting to reconnect...");
+      this.cleanup()
+        .then(() => this.start())
+        .catch(error => {
+          console.error("Reconnection failed:", error);
+          this.emit("failed", "Reconnection failed");
+        });
+    }
+  }
+
+  private async cleanup() {
+    this.clearTimeouts();
+    this.stopDataChannelInterval();
+
+    if (this.webSocket) {
+      this.webSocket.close();
+      this.webSocket = null;
+    }
+
+    if (this.dc) {
+      this.dc.close();
+      this.dc = null;
+    }
+
+    if (this.pc) {
+      this.pc.close();
+      this.pc = null;
+    }
+
+    if (this.audioWorklet) {
+      this.audioWorklet.disconnect();
+      this.audioWorklet = null;
+    }
+
+    if (this.sourceNode) {
+      this.sourceNode.disconnect();
+      this.sourceNode = null;
+    }
+
+    this.sessionInitialized = false;
+    this.candidateCount = 0;
+    this.prevCandidateCount = -1;
+    this.errorReason = null;
+  }
+
+  private clearTimeouts() {
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+  }
+
   listenToMediastreamTrack(stream: MediaStreamTrack) {
-    this.inputStreamTrack = stream;
-    const audioContext: AudioContext = new (window.AudioContext ||
-      (window as any).webkitAudioContext)({
-        sampleRate: 16000,
-      });
-    this.initializeAudioWorklet(audioContext, stream);
+    try {
+      this.inputStreamTrack = stream;
+      const audioContext: AudioContext = new (window.AudioContext ||
+        (window as any).webkitAudioContext)({
+          sampleRate: 16000,
+        });
+      this.initializeAudioWorklet(audioContext, stream);
+    } catch (error) {
+      console.error("Failed to initialize audio stream:", error);
+      this.emit("failed", "Audio initialization failed");
+    }
   }
 
   private initializeAudioWorklet(
@@ -375,71 +557,89 @@ export class SimliClient extends EventEmitter {
             this.sendAudioData(new Uint8Array(event.data.data.buffer));
           }
         };
+      })
+      .catch(error => {
+        console.error("Failed to initialize AudioWorklet:", error);
+        this.emit("failed", "AudioWorklet initialization failed");
       });
   }
 
   sendAudioData(audioData: Uint8Array) {
-    if (this.sessionInitialized === false) {
+    if (!this.sessionInitialized) {
       console.log("Session not initialized. Ignoring audio data.");
       return;
     }
-    if (this.webSocket && this.webSocket.readyState === this.webSocket.OPEN) {
-      try {
-        if (this.sessionInitialized) {
-          this.webSocket?.send(audioData);
-          if (this.lastSendTime !== 0) {
-            console.log("Time between sends: ", Date.now() - this.lastSendTime);
-          }
-          this.lastSendTime = Date.now();
-        } else {
-          console.log(
-            "Data channel open but session is being initialized. Ignoring audio data."
-          );
-        }
-      } catch (error) {
-        console.error("Failed to send audio data:", error);
-      }
-    } else {
+
+    if (this.webSocket?.readyState !== WebSocket.OPEN) {
       console.error(
-        "Data channel is not open. Current state:",
-        this.dc?.readyState,
-        "Error Reason: ",
+        "WebSocket is not open. Current state:",
+        this.webSocket?.readyState,
+        "Error Reason:",
         this.errorReason
       );
+      return;
+    }
+
+    try {
+      this.webSocket.send(audioData);
+      const currentTime = Date.now();
+      if (this.lastSendTime !== 0) {
+        const timeBetweenSends = currentTime - this.lastSendTime;
+        if (timeBetweenSends > 100) { // Log only if significant delay
+          console.log("Time between sends:", timeBetweenSends);
+        }
+      }
+      this.lastSendTime = currentTime;
+    } catch (error) {
+      console.error("Failed to send audio data:", error);
+      this.handleConnectionFailure("Failed to send audio data");
     }
   }
 
   close() {
+    console.log("Closing SimliClient connection");
     this.emit("disconnected");
-    this.stopDataChannelInterval();
 
-    // close data channel
-    if (this.dc) {
-      this.dc.close();
+    try {
+      this.cleanup();
+    } catch (error) {
+      console.error("Error during cleanup:", error);
     }
-    this.webSocket?.close();
-
-    // close transceivers
-    if (this.pc?.getTransceivers) {
-      this.pc.getTransceivers().forEach((transceiver) => {
-        if (transceiver.stop) {
-          transceiver.stop();
-        }
-      });
-    }
-
-    // close local audio / video
-    this.pc?.getSenders().forEach((sender) => {
-      sender.track?.stop();
-    });
-
-    // close peer connection
-    this.pc?.close();
   }
 
   public ClearBuffer = () => {
-    if (this.webSocket && this.webSocket.readyState === this.webSocket.OPEN) {
-      this.webSocket?.send("SKIP");
+    if (this.webSocket?.readyState === WebSocket.OPEN) {
+      try {
+        this.webSocket.send("SKIP");
+      } catch (error) {
+        console.error("Failed to clear buffer:", error);
+      }
+    } else {
+      console.warn("Cannot clear buffer: WebSocket not open");
     }
   };
+
+  // Utility method to check connection status
+  public isConnected(): boolean {
+    return (
+      this.sessionInitialized &&
+      this.webSocket?.readyState === WebSocket.OPEN &&
+      this.pc?.connectionState === "connected"
+    );
+  }
+
+  // Method to get current connection status details
+  public getConnectionStatus(): {
+    sessionInitialized: boolean;
+    webSocketState: number | null;
+    peerConnectionState: RTCPeerConnectionState | null;
+    errorReason: string | null;
+  } {
+    return {
+      sessionInitialized: this.sessionInitialized,
+      webSocketState: this.webSocket?.readyState ?? null,
+      peerConnectionState: this.pc?.connectionState ?? null,
+      errorReason: this.errorReason,
+    };
+  }
 }
