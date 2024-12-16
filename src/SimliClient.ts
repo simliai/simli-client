@@ -88,7 +88,7 @@ export class SimliClient {
     this.handleSilence = config.handleSilence;
     this.maxSessionLength = config.maxSessionLength;
     this.maxIdleTime = config.maxIdleTime;
-    if (config.SimliURL === "") {
+    if (!config.SimliURL || config.SimliURL === "") {
       this.SimliURL = "s://api.simli.ai";
     }
     else {
@@ -97,7 +97,7 @@ export class SimliClient {
     if (typeof window !== "undefined") {
       this.videoRef = config.videoRef;
       this.audioRef = config.audioRef;
-      console.log("SIMLI: simli-client@1.2.2 initialized");
+      console.log("SIMLI: simli-client@1.2.3 initialized");
     } else {
       console.warn(
         "SIMLI: Running in Node.js environment. Some features may not be available."
