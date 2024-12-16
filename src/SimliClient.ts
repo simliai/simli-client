@@ -1,5 +1,8 @@
-import { EventEmitter } from "events";
 import { AudioProcessor } from "./AudioWorklet";
+
+// Custom event handler types
+type EventCallback = (...args: any[]) => void;
+type EventMap = Map<string, Set<EventCallback>>;
 
 export interface SimliClientConfig {
   apiKey: string;
@@ -17,7 +20,7 @@ export interface SimliClientEvents {
   failed: (reason: string) => void;
 }
 
-export class SimliClient extends EventEmitter {
+export class SimliClient {
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
   private dcInterval: NodeJS.Timeout | null = null;
@@ -43,24 +46,35 @@ export class SimliClient extends EventEmitter {
   private readonly RETRY_DELAY = 1500;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private readonly CONNECTION_TIMEOUT_MS = 15000;
+  
+  // Event handling
+  private events: EventMap = new Map();
 
-  constructor() {
-    super();
-  }
-
-  // Add type-safe emit and on methods
-  public emit<K extends keyof SimliClientEvents>(
-    event: K,
-    ...args: Parameters<SimliClientEvents[K]>
-  ): boolean {
-    return super.emit(event, ...args);
-  }
-
+  // Type-safe event methods
   public on<K extends keyof SimliClientEvents>(
     event: K,
-    listener: SimliClientEvents[K]
-  ): this {
-    return super.on(event, listener);
+    callback: SimliClientEvents[K]
+  ): void {
+    if (!this.events.has(event)) {
+      this.events.set(event, new Set());
+    }
+    this.events.get(event)?.add(callback as EventCallback);
+  }
+
+  public off<K extends keyof SimliClientEvents>(
+    event: K,
+    callback: SimliClientEvents[K]
+  ): void {
+    this.events.get(event)?.delete(callback as EventCallback);
+  }
+
+  private emit<K extends keyof SimliClientEvents>(
+    event: K,
+    ...args: Parameters<SimliClientEvents[K]>
+  ): void {
+    this.events.get(event)?.forEach(callback => {
+      callback(...args);
+    });
   }
 
   public Initialize(config: SimliClientConfig) {
@@ -72,6 +86,7 @@ export class SimliClient extends EventEmitter {
     if (typeof window !== "undefined") {
       this.videoRef = config.videoRef;
       this.audioRef = config.audioRef;
+      console.log("SIMLI: simli-client@1.2.1 initialized");
     } else {
       console.warn(
         "SIMLI: Running in Node.js environment. Some features may not be available."
@@ -384,8 +399,7 @@ export class SimliClient extends EventEmitter {
       });
 
       ws.addEventListener("close", () => {
-        console.log("SIMLI: WebSocket closed");
-        this.handleConnectionFailure("WebSocket closed unexpectedly");
+        console.warn("SIMLI: WebSocket closed");
       });
 
       // Wait for WebSocket connection
@@ -478,6 +492,7 @@ export class SimliClient extends EventEmitter {
   private async cleanup() {
     this.clearTimeouts();
     this.stopDataChannelInterval();
+    this.events.clear();
 
     if (this.webSocket) {
       this.webSocket.close();
