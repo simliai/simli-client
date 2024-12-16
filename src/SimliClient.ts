@@ -12,12 +12,15 @@ export interface SimliClientConfig {
   maxIdleTime: number;
   videoRef: React.RefObject<HTMLVideoElement>;
   audioRef: React.RefObject<HTMLAudioElement>;
+  SimliURL: string | "";
 }
 
 export interface SimliClientEvents {
   connected: () => void;
   disconnected: () => void;
   failed: (reason: string) => void;
+  speaking: () => void;
+  silent: () => void;
 }
 
 export class SimliClient {
@@ -46,7 +49,9 @@ export class SimliClient {
   private readonly RETRY_DELAY = 1500;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private readonly CONNECTION_TIMEOUT_MS = 15000;
-  
+  private SimliURL: string = "";
+  public isAvatarSpeaking: boolean = false;
+
   // Event handling
   private events: EventMap = new Map();
 
@@ -83,10 +88,16 @@ export class SimliClient {
     this.handleSilence = config.handleSilence;
     this.maxSessionLength = config.maxSessionLength;
     this.maxIdleTime = config.maxIdleTime;
+    if (config.SimliURL === "") {
+      this.SimliURL = "s://api.simli.ai";
+    }
+    else {
+      this.SimliURL = config.SimliURL;
+    }
     if (typeof window !== "undefined") {
       this.videoRef = config.videoRef;
       this.audioRef = config.audioRef;
-      console.log("SIMLI: simli-client@1.2.1 initialized");
+      console.log("SIMLI: simli-client@1.2.2 initialized");
     } else {
       console.warn(
         "SIMLI: Running in Node.js environment. Some features may not be available."
@@ -97,7 +108,7 @@ export class SimliClient {
   private async getIceServers(attempt = 1): Promise<RTCIceServer[]> {
     try {
       const response: any = await Promise.race([
-        fetch("https://api.simli.ai/getIceServers", {
+        fetch(`http${this.SimliURL}/getIceServers`, {
           headers: { "Content-Type": "application/json" },
           method: "POST",
           body: JSON.stringify({ apiKey: this.apiKey }),
@@ -307,7 +318,7 @@ export class SimliClient {
 
     try {
       const response = await fetch(
-        "https://api.simli.ai/startAudioToVideoSession",
+        `http${this.SimliURL}/startAudioToVideoSession`,
         {
           method: "POST",
           body: JSON.stringify(metadata),
@@ -350,7 +361,7 @@ export class SimliClient {
         throw new Error("SIMLI: Local description is null");
       }
 
-      const ws = new WebSocket("wss://api.simli.ai/StartWebRTCSession");
+      const ws = new WebSocket(`ws${this.SimliURL}/StartWebRTCSession`);
       this.webSocket = ws;
 
       let wsConnectResolve: () => void;
@@ -382,6 +393,12 @@ export class SimliClient {
             }
           } else if (evt.data === "ACK") {
             // console.log("SIMLI: Received ACK");
+          } else if (evt.data === "SPEAK") {
+            this.emit("speaking");
+            this.isAvatarSpeaking = true;
+          } else if (evt.data === "SILENT") {
+            this.emit("silent");
+            this.isAvatarSpeaking = false;
           } else {
             const message = JSON.parse(evt.data);
             if (message.type === "answer") {
