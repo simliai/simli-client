@@ -40,6 +40,7 @@ interface SimliClientConfig {
     maxIdleTime: number;
     videoRef: React.RefObject<HTMLVideoElement>;
     audioRef: React.RefObject<HTMLAudioElement>;
+    enableConsoleLogs?: boolean;
     SimliURL: string | "";
 }
 
@@ -79,6 +80,7 @@ class SimliClient {
     private readonly CONNECTION_TIMEOUT_MS = 15000;
     private SimliURL: string = "";
     public isAvatarSpeaking: boolean = false;
+    public enableConsoleLogs: boolean = false;
 
     // Event handling
     private events: EventMap = new Map();
@@ -116,6 +118,7 @@ class SimliClient {
         this.handleSilence = config.handleSilence;
         this.maxSessionLength = config.maxSessionLength;
         this.maxIdleTime = config.maxIdleTime;
+        this.enableConsoleLogs = config.enableConsoleLogs ?? false;
         if (!config.SimliURL || config.SimliURL === "") {
             this.SimliURL = "s://api.simli.ai";
         }
@@ -125,7 +128,7 @@ class SimliClient {
         if (typeof window !== "undefined") {
             this.videoRef = config.videoRef;
             this.audioRef = config.audioRef;
-            console.log("SIMLI: simli-client@1.2.4 initialized");
+            console.log("SIMLI: simli-client@1.2.5 initialized");
         } else {
             console.warn(
                 "SIMLI: Running in Node.js environment. Some features may not be available."
@@ -157,14 +160,14 @@ class SimliClient {
 
             return iceServers;
         } catch (error) {
-            console.warn(`SIMLI: ICE servers fetch attempt ${attempt} failed:`, error);
+            if (this.enableConsoleLogs) console.warn(`SIMLI: ICE servers fetch attempt ${attempt} failed:`, error);
 
             if (attempt < this.MAX_RETRY_ATTEMPTS) {
                 await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
                 return this.getIceServers(attempt + 1);
             }
 
-            console.log("SIMLI: Using fallback STUN server");
+            if (this.enableConsoleLogs) console.log("SIMLI: Using fallback STUN server");
             return [{ urls: ["stun:stun.l.google.com:19302"] }];
         }
     }
@@ -174,7 +177,7 @@ class SimliClient {
             sdpSemantics: "unified-plan",
             iceServers: await this.getIceServers(),
         };
-        console.log("SIMLI: Server running: ", config.iceServers);
+        if (this.enableConsoleLogs) console.log("SIMLI: Server running: ", config.iceServers);
 
         this.pc = new window.RTCPeerConnection(config);
 
@@ -187,22 +190,22 @@ class SimliClient {
         if (!this.pc) return;
 
         this.pc.addEventListener("icegatheringstatechange", () => {
-            console.log("SIMLI: ICE gathering state changed: ", this.pc?.iceGatheringState);
+            if (this.enableConsoleLogs) console.log("SIMLI: ICE gathering state changed: ", this.pc?.iceGatheringState);
         });
 
         this.pc.addEventListener("iceconnectionstatechange", () => {
-            console.log("SIMLI: ICE connection state changed: ", this.pc?.iceConnectionState);
+            if (this.enableConsoleLogs) console.log("SIMLI: ICE connection state changed: ", this.pc?.iceConnectionState);
             if (this.pc?.iceConnectionState === "failed") {
                 this.handleConnectionFailure("ICE connection failed");
             }
         });
 
         this.pc.addEventListener("signalingstatechange", () => {
-            console.log("SIMLI: Signaling state changed: ", this.pc?.signalingState);
+            if (this.enableConsoleLogs) console.log("SIMLI: Signaling state changed: ", this.pc?.signalingState);
         });
 
         this.pc.addEventListener("track", (evt) => {
-            console.log("SIMLI: Track event: ", evt.track.kind);
+            if (this.enableConsoleLogs) console.log("SIMLI: Track event: ", evt.track.kind);
             if (evt.track.kind === "video" && this.videoRef?.current) {
                 this.videoRef.current.srcObject = evt.streams[0];
             } else if (evt.track.kind === "audio" && this.audioRef?.current) {
@@ -212,9 +215,9 @@ class SimliClient {
 
         this.pc.onicecandidate = (event) => {
             if (event.candidate === null) {
-                // console.log(JSON.stringify(this.pc?.localDescription));
+                // if (this.enableConsoleLogs) console.log(JSON.stringify(this.pc?.localDescription));
             } else {
-                // console.log(event.candidate);
+                // if (this.enableConsoleLogs) console.log(event.candidate);
                 this.candidateCount += 1;
             }
         };
@@ -266,11 +269,11 @@ class SimliClient {
             this.clearTimeouts();
 
         } catch (error) {
-            console.error(`SIMLI: Connection attempt ${retryAttempt} failed:`, error);
+            if (this.enableConsoleLogs) console.error(`SIMLI: Connection attempt ${retryAttempt} failed:`, error);
             this.clearTimeouts();
 
             if (retryAttempt < this.MAX_RETRY_ATTEMPTS) {
-                console.log(`SIMLI: Retrying connection... Attempt ${retryAttempt + 1}`);
+                if (this.enableConsoleLogs) console.log(`SIMLI: Retrying connection... Attempt ${retryAttempt + 1}`);
                 await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
                 await this.cleanup();
                 return this.start(retryAttempt + 1);
@@ -285,13 +288,13 @@ class SimliClient {
         if (!this.dc) return;
 
         this.dc.addEventListener("close", () => {
-            console.log("SIMLI: Data channel closed");
+            if (this.enableConsoleLogs) console.log("SIMLI: Data channel closed");
             this.emit("disconnected");
             this.stopDataChannelInterval();
         });
 
         this.dc.addEventListener("error", (error) => {
-            console.error("SIMLI: Data channel error:", error);
+            if (this.enableConsoleLogs) console.error("SIMLI: Data channel error:", error);
             this.handleConnectionFailure("Data channel error");
         });
     }
@@ -317,17 +320,17 @@ class SimliClient {
             try {
                 this.webSocket?.send(message);
             } catch (error) {
-                console.error("SIMLI: Failed to send message:", error);
+                if (this.enableConsoleLogs) console.error("SIMLI: Failed to send message:", error);
                 this.stopDataChannelInterval();
                 this.handleConnectionFailure("Failed to send ping message");
             }
         } else {
-            console.warn(
+            if (this.enableConsoleLogs) console.warn(
                 "SIMLI: WebSocket is not open. Current state:",
                 this.webSocket?.readyState
             );
             if (this.errorReason !== null) {
-                console.error("SIMLI: Error Reason: ", this.errorReason);
+                if (this.enableConsoleLogs) console.error("SIMLI: Error Reason: ", this.errorReason);
             }
             this.stopDataChannelInterval();
         }
@@ -407,7 +410,7 @@ class SimliClient {
             let answer: RTCSessionDescriptionInit | null = null;
 
             ws.addEventListener("message", async (evt) => {
-                console.log("SIMLI: Received message: ", evt.data);
+                if (this.enableConsoleLogs) console.log("SIMLI: Received message: ", evt.data);
                 try {
                     if (evt.data === "START") {
                         this.sessionInitialized = true;
@@ -418,10 +421,10 @@ class SimliClient {
                     } else if (evt.data.startsWith("pong")) {
                         const pingTime = this.pingSendTimes.get(evt.data.replace("pong", "ping"));
                         if (pingTime) {
-                            console.log("SIMLI: Simli Latency: ", Date.now() - pingTime);
+                            if (this.enableConsoleLogs) console.log("SIMLI: Simli Latency: ", Date.now() - pingTime);
                         }
                     } else if (evt.data === "ACK") {
-                        // console.log("SIMLI: Received ACK");
+                        // if (this.enableConsoleLogs) console.log("SIMLI: Received ACK");
                     } else if (evt.data === "SPEAK") {
                         this.emit("speaking");
                         this.isAvatarSpeaking = true;
@@ -435,17 +438,17 @@ class SimliClient {
                         }
                     }
                 } catch (e) {
-                    console.warn("SIMLI: Error processing WebSocket message:", e);
+                    if (this.enableConsoleLogs) console.warn("SIMLI: Error processing WebSocket message:", e);
                 }
             });
 
             ws.addEventListener("error", (error) => {
-                console.error("SIMLI: WebSocket error:", error);
+                if (this.enableConsoleLogs) console.error("SIMLI: WebSocket error:", error);
                 this.handleConnectionFailure("WebSocket error");
             });
 
             ws.addEventListener("close", () => {
-                console.warn("SIMLI: WebSocket closed");
+                if (this.enableConsoleLogs) console.warn("SIMLI: WebSocket closed");
             });
 
             // Wait for WebSocket connection
@@ -514,7 +517,7 @@ class SimliClient {
 
     private handleConnectionFailure(reason: string) {
         this.errorReason = reason;
-        console.error("SIMLI: connection failure:", reason);
+        if (this.enableConsoleLogs) console.error("SIMLI: connection failure:", reason);
         this.emit("failed", reason);
         this.cleanup();
     }
@@ -525,11 +528,11 @@ class SimliClient {
 
     private handleDisconnection() {
         if (this.sessionInitialized) {
-            console.log("SIMLI: Connection lost, attempting to reconnect...");
+            if (this.enableConsoleLogs) console.log("SIMLI: Connection lost, attempting to reconnect...");
             this.cleanup()
                 .then(() => this.start())
                 .catch(error => {
-                    console.error("SIMLI: Reconnection failed:", error);
+                    if (this.enableConsoleLogs) console.error("SIMLI: Reconnection failed:", error);
                     this.emit("failed", "Reconnection failed");
                 });
         }
@@ -587,7 +590,7 @@ class SimliClient {
                 });
             this.initializeAudioWorklet(audioContext, stream);
         } catch (error) {
-            console.error("SIMLI: Failed to initialize audio stream:", error);
+            if (this.enableConsoleLogs) console.error("SIMLI: Failed to initialize audio stream:", error);
             this.emit("failed", "Audio initialization failed");
         }
     }
@@ -621,19 +624,19 @@ class SimliClient {
                 };
             })
             .catch(error => {
-                console.error("SIMLI: Failed to initialize AudioWorklet:", error);
+                if (this.enableConsoleLogs) console.error("SIMLI: Failed to initialize AudioWorklet:", error);
                 this.emit("failed", "AudioWorklet initialization failed");
             });
     }
 
     sendAudioData(audioData: Uint8Array) {
         if (!this.sessionInitialized) {
-            console.log("SIMLI: Session not initialized. Ignoring audio data.");
+            if (this.enableConsoleLogs) console.log("SIMLI: Session not initialized. Ignoring audio data.");
             return;
         }
 
         if (this.webSocket?.readyState !== WebSocket.OPEN) {
-            console.error(
+            if (this.enableConsoleLogs) console.error(
                 "SIMLI: WebSocket is not open. Current state:",
                 this.webSocket?.readyState,
                 "Error Reason:",
@@ -648,24 +651,24 @@ class SimliClient {
             if (this.lastSendTime !== 0) {
                 const timeBetweenSends = currentTime - this.lastSendTime;
                 if (timeBetweenSends > 100) { // Log only if significant delay
-                    console.log("SIMLI: Time between sends:", timeBetweenSends);
+                    if (this.enableConsoleLogs) console.log("SIMLI: Time between sends:", timeBetweenSends);
                 }
             }
             this.lastSendTime = currentTime;
         } catch (error) {
-            console.error("SIMLI: Failed to send audio data:", error);
+            if (this.enableConsoleLogs) console.error("SIMLI: Failed to send audio data:", error);
             this.handleConnectionFailure("Failed to send audio data");
         }
     }
 
     close() {
-        console.log("SIMLI: Closing SimliClient connection");
+        if (this.enableConsoleLogs) console.log("SIMLI: Closing SimliClient connection");
         this.emit("disconnected");
 
         try {
             this.cleanup();
         } catch (error) {
-            console.error("SIMLI: Error during cleanup:", error);
+            if (this.enableConsoleLogs) console.error("SIMLI: Error during cleanup:", error);
         }
     }
 
@@ -674,10 +677,10 @@ class SimliClient {
             try {
                 this.webSocket.send("SKIP");
             } catch (error) {
-                console.error("SIMLI: Failed to clear buffer:", error);
+                if (this.enableConsoleLogs) console.error("SIMLI: Failed to clear buffer:", error);
             }
         } else {
-            console.warn("SIMLI: Cannot clear buffer: WebSocket not open");
+            if (this.enableConsoleLogs) console.warn("SIMLI: Cannot clear buffer: WebSocket not open");
         }
     };
 
