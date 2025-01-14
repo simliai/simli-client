@@ -38,8 +38,8 @@ interface SimliClientConfig {
     handleSilence: boolean;
     maxSessionLength: number;
     maxIdleTime: number;
-    videoRef: React.RefObject<HTMLVideoElement>;
-    audioRef: React.RefObject<HTMLAudioElement>;
+    videoRef: HTMLVideoElement;
+    audioRef: HTMLAudioElement;
     enableConsoleLogs?: boolean;
     SimliURL: string | "";
 }
@@ -61,8 +61,8 @@ class SimliClient {
     private apiKey: string = "";
     private faceID: string = "";
     private handleSilence: boolean = true;
-    private videoRef: React.RefObject<HTMLVideoElement> | null = null;
-    private audioRef: React.RefObject<HTMLAudioElement> | null = null;
+    private videoRef: HTMLVideoElement | null = null;
+    private audioRef: HTMLAudioElement | null = null;
     private errorReason: string | null = null;
     private sessionInitialized: boolean = false;
     private inputStreamTrack: MediaStreamTrack | null = null;
@@ -128,7 +128,13 @@ class SimliClient {
         if (typeof window !== "undefined") {
             this.videoRef = config.videoRef;
             this.audioRef = config.audioRef;
-            console.log("SIMLI: simli-client@1.2.5 initialized");
+            if (!(this.videoRef instanceof HTMLVideoElement)) {
+                console.error("SIMLI: videoRef is required in config as HTMLVideoElement");
+            }
+            if (!(this.audioRef instanceof HTMLAudioElement)) {
+                console.error("SIMLI: audioRef is required in config as HTMLAudioElement");
+            }
+            console.log("SIMLI: simli-client@1.2.6 initialized");
         } else {
             console.warn(
                 "SIMLI: Running in Node.js environment. Some features may not be available."
@@ -206,10 +212,10 @@ class SimliClient {
 
         this.pc.addEventListener("track", (evt) => {
             if (this.enableConsoleLogs) console.log("SIMLI: Track event: ", evt.track.kind);
-            if (evt.track.kind === "video" && this.videoRef?.current) {
-                this.videoRef.current.srcObject = evt.streams[0];
-            } else if (evt.track.kind === "audio" && this.audioRef?.current) {
-                this.audioRef.current.srcObject = evt.streams[0];
+            if (evt.track.kind === "video" && this.videoRef) {
+                this.videoRef.srcObject = evt.streams[0];
+            } else if (evt.track.kind === "audio" && this.audioRef) {
+                this.audioRef.srcObject = evt.streams[0];
             }
         });
 
