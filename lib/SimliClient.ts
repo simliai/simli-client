@@ -33,17 +33,30 @@ type EventCallback = (...args: any[]) => void;
 type EventMap = Map<string, Set<EventCallback>>;
 
 interface SimliClientConfig {
-    apiKey: string;
+    apiKey: string | "";
     faceID: string;
     handleSilence: boolean;
     maxSessionLength: number;
     maxIdleTime: number;
+    session_token: string | "";
     videoRef: HTMLVideoElement;
     audioRef: HTMLAudioElement;
     enableConsoleLogs?: boolean;
     SimliURL: string | "";
 }
+interface SimliSessionRequest {
+    faceId: string;
+    isJPG: boolean;
+    apiKey: string;
+    syncAudio: boolean;
+    handleSilence: boolean;
+    maxSessionLength: number;
+    maxIdleTime: number;
+}
 
+interface SimliSessionToken {
+    session_token: string
+}
 interface SimliClientEvents {
     connected: () => void;
     disconnected: () => void;
@@ -59,6 +72,7 @@ class SimliClient {
     private candidateCount: number = 0;
     private prevCandidateCount: number = -1;
     private apiKey: string = "";
+    private session_token: string = "";
     private faceID: string = "";
     private handleSilence: boolean = true;
     private videoRef: HTMLVideoElement | null = null;
@@ -81,7 +95,6 @@ class SimliClient {
     private SimliURL: string = "";
     public isAvatarSpeaking: boolean = false;
     public enableConsoleLogs: boolean = false;
-
     // Event handling
     private events: EventMap = new Map();
 
@@ -113,12 +126,17 @@ class SimliClient {
     }
 
     public Initialize(config: SimliClientConfig) {
+        if ((!config.apiKey || config.apiKey === "") && (!config.session_token || config.session_token === "")) {
+            console.error("SIMLI: apiKey or session_token is required in config");
+            throw new Error("apiKey or session_token is required in config");
+        }
         this.apiKey = config.apiKey;
         this.faceID = config.faceID;
         this.handleSilence = config.handleSilence;
         this.maxSessionLength = config.maxSessionLength;
         this.maxIdleTime = config.maxIdleTime;
         this.enableConsoleLogs = config.enableConsoleLogs ?? false;
+        this.session_token = config.session_token;
         if (!config.SimliURL || config.SimliURL === "") {
             this.SimliURL = "s://api.simli.ai";
         }
@@ -142,13 +160,13 @@ class SimliClient {
         }
     }
 
-    private async getIceServers(attempt = 1): Promise<RTCIceServer[]> {
+    public async getIceServers(apiKey: string, SimliURL: string, attempt = 1): Promise<RTCIceServer[]> {
         try {
             const response: any = await Promise.race([
-                fetch(`http${this.SimliURL}/getIceServers`, {
+                fetch(`http${SimliURL}/getIceServers`, {
                     headers: { "Content-Type": "application/json" },
                     method: "POST",
-                    body: JSON.stringify({ apiKey: this.apiKey }),
+                    body: JSON.stringify({ apiKey: apiKey }),
                 }),
                 new Promise((_, reject) =>
                     setTimeout(() => reject(new Error("SIMLI: ICE server request timeout")), 5000)
@@ -170,7 +188,7 @@ class SimliClient {
 
             if (attempt < this.MAX_RETRY_ATTEMPTS) {
                 await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
-                return this.getIceServers(attempt + 1);
+                return this.getIceServers(apiKey, SimliURL, attempt + 1);
             }
 
             if (this.enableConsoleLogs) console.log("SIMLI: Using fallback STUN server");
@@ -178,10 +196,10 @@ class SimliClient {
         }
     }
 
-    private async createPeerConnection() {
+    private async createPeerConnection(iceServers: RTCIceServer[] = []) {
         const config = {
             sdpSemantics: "unified-plan",
-            iceServers: await this.getIceServers(),
+            iceServers: iceServers,
         };
         if (this.enableConsoleLogs) console.log("SIMLI: Server running: ", config.iceServers);
 
@@ -249,7 +267,9 @@ class SimliClient {
         });
     }
 
-    async start(retryAttempt = 1): Promise<void> {
+    async start(
+        iceServers: RTCIceServer[] = [], retryAttempt = 1
+    ): Promise<void> {
         try {
             this.clearTimeouts();
 
@@ -257,8 +277,10 @@ class SimliClient {
             this.connectionTimeout = setTimeout(() => {
                 this.handleConnectionTimeout();
             }, this.CONNECTION_TIMEOUT_MS);
-
-            await this.createPeerConnection();
+            if (iceServers.length === 0) {
+                iceServers = await this.getIceServers(this.apiKey, this.SimliURL)
+            }
+            await this.createPeerConnection(iceServers);
 
             const parameters = { ordered: true };
             this.dc = this.pc!.createDataChannel("chat", parameters);
@@ -282,7 +304,7 @@ class SimliClient {
                 if (this.enableConsoleLogs) console.log(`SIMLI: Retrying connection... Attempt ${retryAttempt + 1}`);
                 await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
                 await this.cleanup();
-                return this.start(retryAttempt + 1);
+                return this.start(iceServers, retryAttempt + 1);
             }
 
             this.emit("failed", `Failed to connect after ${this.MAX_RETRY_ATTEMPTS} attempts`);
@@ -342,20 +364,10 @@ class SimliClient {
         }
     }
 
-    private async initializeSession() {
-        const metadata = {
-            faceId: this.faceID,
-            isJPG: false,
-            apiKey: this.apiKey,
-            syncAudio: true,
-            handleSilence: this.handleSilence,
-            maxSessionLength: this.maxSessionLength,
-            maxIdleTime: this.maxIdleTime,
-        };
-
+    public async createSessionToken(SimliURL: string, metadata: SimliSessionRequest): Promise<SimliSessionToken> {
         try {
             const response = await fetch(
-                `http${this.SimliURL}/startAudioToVideoSession`,
+                `http${SimliURL}/startAudioToVideoSession`,
                 {
                     method: "POST",
                     body: JSON.stringify(metadata),
@@ -371,8 +383,16 @@ class SimliClient {
             }
 
             const resJSON = await response.json();
+            return resJSON;
+        } catch (error) {
+            this.handleConnectionFailure(`Session initialization failed: ${error}`);
+            throw error;
+        }
+    }
+    private async sendSessionToken(sessionToken: string) {
+        try {
             if (this.webSocket && this.webSocket.readyState === this.webSocket.OPEN) {
-                this.webSocket?.send(resJSON.session_token);
+                this.webSocket?.send(sessionToken);
             } else {
                 throw new Error("WebSocket not open when trying to send session token");
             }
@@ -408,7 +428,21 @@ class SimliClient {
 
             ws.addEventListener("open", async () => {
                 await ws.send(JSON.stringify(this.pc?.localDescription));
-                await this.initializeSession();
+                const metadata = {
+                    faceId: this.faceID,
+                    isJPG: false,
+                    apiKey: this.apiKey,
+                    syncAudio: true,
+                    handleSilence: this.handleSilence,
+                    maxSessionLength: this.maxSessionLength,
+                    maxIdleTime: this.maxIdleTime,
+                };
+                if (!this.session_token || this.session_token === "") {
+                    await this.sendSessionToken((await this.createSessionToken(this.SimliURL, metadata)).session_token)
+                }
+                else {
+                    await this.sendSessionToken(this.session_token);
+                }
                 this.startDataChannelInterval();
                 wsConnectResolve();
             });
