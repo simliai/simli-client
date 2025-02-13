@@ -152,7 +152,7 @@ class SimliClient {
             if (!(this.audioRef instanceof HTMLAudioElement)) {
                 console.error("SIMLI: audioRef is required in config as HTMLAudioElement");
             }
-            console.log("SIMLI: simli-client@1.2.6 initialized");
+            console.log("SIMLI: simli-client@1.2.8 initialized");
         } else {
             console.warn(
                 "SIMLI: Running in Node.js environment. Some features may not be available."
@@ -251,16 +251,20 @@ class SimliClient {
         if (!this.pc) return;
 
         this.pc.addEventListener("connectionstatechange", () => {
+            if (this.enableConsoleLogs) console.log("SIMLI: Connection state changed to:", this.pc?.connectionState);
+            
             switch (this.pc?.connectionState) {
                 case "connected":
                     this.clearTimeouts();
                     break;
                 case "failed":
                 case "closed":
+                    this.emit("disconnected");
                     this.emit("failed", "Connection failed or closed");
                     this.cleanup();
                     break;
                 case "disconnected":
+                    this.emit("disconnected");
                     this.handleDisconnection();
                     break;
             }
@@ -323,6 +327,7 @@ class SimliClient {
 
         this.dc.addEventListener("error", (error) => {
             if (this.enableConsoleLogs) console.error("SIMLI: Data channel error:", error);
+            this.emit("disconnected");
             this.handleConnectionFailure("Data channel error");
         });
     }
@@ -420,6 +425,7 @@ class SimliClient {
 
             const ws = new WebSocket(`ws${this.SimliURL}/StartWebRTCSession`);
             this.webSocket = ws;
+            this.setupWebSocketListeners(ws);
 
             let wsConnectResolve: () => void;
             const wsConnectPromise = new Promise<void>((resolve) => {
@@ -480,15 +486,6 @@ class SimliClient {
                 } catch (e) {
                     if (this.enableConsoleLogs) console.warn("SIMLI: Error processing WebSocket message:", e);
                 }
-            });
-
-            ws.addEventListener("error", (error) => {
-                if (this.enableConsoleLogs) console.error("SIMLI: WebSocket error:", error);
-                this.handleConnectionFailure("WebSocket error");
-            });
-
-            ws.addEventListener("close", () => {
-                if (this.enableConsoleLogs) console.warn("SIMLI: WebSocket closed");
             });
 
             // Wait for WebSocket connection
@@ -746,6 +743,19 @@ class SimliClient {
             peerConnectionState: this.pc?.connectionState ?? null,
             errorReason: this.errorReason,
         };
+    }
+
+    private setupWebSocketListeners(ws: WebSocket) {
+        ws.addEventListener("error", (error) => {
+            if (this.enableConsoleLogs) console.error("SIMLI: WebSocket error:", error);
+            this.emit("disconnected");
+            this.handleConnectionFailure("WebSocket error");
+        });
+
+        ws.addEventListener("close", () => {
+            if (this.enableConsoleLogs) console.warn("SIMLI: WebSocket closed");
+            this.emit("disconnected");
+        });
     }
 }
 
