@@ -83,6 +83,8 @@ class SimliClient {
     private sourceNode: MediaStreamAudioSourceNode | null = null;
     private audioWorklet: AudioWorkletNode | null = null;
     private audioBuffer: Int16Array | null = null;
+    private answer: RTCSessionDescriptionInit | null = null;
+    private localDescription: RTCSessionDescription | null = null;
     private maxSessionLength: number = 3600;
     private maxIdleTime: number = 600;
     private pingSendTimes: Map<string, number> = new Map();
@@ -181,7 +183,6 @@ class SimliClient {
             if (!iceServers || iceServers.length === 0) {
                 throw new Error("SIMLI: No ICE servers returned");
             }
-
             return iceServers;
         } catch (error) {
             if (this.enableConsoleLogs) console.warn(`SIMLI: ICE servers fetch attempt ${attempt} failed:`, error);
@@ -252,7 +253,7 @@ class SimliClient {
 
         this.pc.addEventListener("connectionstatechange", () => {
             if (this.enableConsoleLogs) console.log("SIMLI: Connection state changed to:", this.pc?.connectionState);
-            
+
             switch (this.pc?.connectionState) {
                 case "connected":
                     this.clearTimeouts();
@@ -280,10 +281,44 @@ class SimliClient {
             // Set overall connection timeout
             this.connectionTimeout = setTimeout(() => {
                 this.handleConnectionTimeout();
-            }, this.CONNECTION_TIMEOUT_MS);
+            }, this.CONNECTION_TIMEOUT_MS)
+
+            const ws = new WebSocket(`ws${this.SimliURL}/StartWebRTCSession`);
+            this.webSocket = ws;
+            const wsConnectPromise = new Promise<void>((resolve) => {
+                if (!this.webSocket) {
+                    return
+                }
+                this.setupWebSocketListeners(this.webSocket, resolve);
+            });
+
             if (iceServers.length === 0) {
-                iceServers = await this.getIceServers(this.apiKey, this.SimliURL)
+                const metadata = {
+                    faceId: this.faceID,
+                    isJPG: false,
+                    apiKey: this.apiKey,
+                    syncAudio: true,
+                    handleSilence: this.handleSilence,
+                    maxSessionLength: this.maxSessionLength,
+                    maxIdleTime: this.maxIdleTime,
+                };
+                // Get All POST request related data at the same time
+                const sessionRunData = await Promise.all
+                    ([this.getIceServers(this.apiKey, this.SimliURL), this.createSessionToken(this.SimliURL, metadata),
+
+                    ])
+                iceServers = sessionRunData[0]
+                this.session_token = sessionRunData[1].session_token
             }
+
+            // Wait for WebSocket connection
+            await Promise.race([
+                wsConnectPromise,
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("SIMLI: WebSocket connection timeout")), 5000)
+                ),
+            ]);
+
             await this.createPeerConnection(iceServers);
 
             const parameters = { ordered: true };
@@ -291,7 +326,6 @@ class SimliClient {
 
             this.setupDataChannelListeners();
             this.setupConnectionStateHandler();
-
             this.pc?.addTransceiver("audio", { direction: "recvonly" });
             this.pc?.addTransceiver("video", { direction: "recvonly" });
 
@@ -370,6 +404,7 @@ class SimliClient {
     }
 
     public async createSessionToken(SimliURL: string, metadata: SimliSessionRequest): Promise<SimliSessionToken> {
+        if (this.session_token && this.session_token !== "") { return { session_token: this.session_token } }
         try {
             const response = await fetch(
                 `http${SimliURL}/startAudioToVideoSession`,
@@ -418,83 +453,11 @@ class SimliClient {
 
             await this.waitForIceGathering();
 
-            const localDescription = this.pc.localDescription;
-            if (!localDescription) {
+            this.localDescription = this.pc.localDescription;
+            if (!this.localDescription) {
                 throw new Error("SIMLI: Local description is null");
             }
 
-            const ws = new WebSocket(`ws${this.SimliURL}/StartWebRTCSession`);
-            this.webSocket = ws;
-            this.setupWebSocketListeners(ws);
-
-            let wsConnectResolve: () => void;
-            const wsConnectPromise = new Promise<void>((resolve) => {
-                wsConnectResolve = resolve;
-            });
-
-            ws.addEventListener("open", async () => {
-                await ws.send(JSON.stringify(this.pc?.localDescription));
-                const metadata = {
-                    faceId: this.faceID,
-                    isJPG: false,
-                    apiKey: this.apiKey,
-                    syncAudio: true,
-                    handleSilence: this.handleSilence,
-                    maxSessionLength: this.maxSessionLength,
-                    maxIdleTime: this.maxIdleTime,
-                };
-                if (!this.session_token || this.session_token === "") {
-                    await this.sendSessionToken((await this.createSessionToken(this.SimliURL, metadata)).session_token)
-                }
-                else {
-                    await this.sendSessionToken(this.session_token);
-                }
-                this.startDataChannelInterval();
-                wsConnectResolve();
-            });
-
-            let answer: RTCSessionDescriptionInit | null = null;
-
-            ws.addEventListener("message", async (evt) => {
-                if (this.enableConsoleLogs) console.log("SIMLI: Received message: ", evt.data);
-                try {
-                    if (evt.data === "START") {
-                        this.sessionInitialized = true;
-                        this.sendAudioData(new Uint8Array(6000));
-                        this.emit("connected");
-                    } else if (evt.data === "STOP") {
-                        this.close();
-                    } else if (evt.data.startsWith("pong")) {
-                        const pingTime = this.pingSendTimes.get(evt.data.replace("pong", "ping"));
-                        if (pingTime) {
-                            if (this.enableConsoleLogs) console.log("SIMLI: Simli Latency: ", Date.now() - pingTime);
-                        }
-                    } else if (evt.data === "ACK") {
-                        // if (this.enableConsoleLogs) console.log("SIMLI: Received ACK");
-                    } else if (evt.data === "SPEAK") {
-                        this.emit("speaking");
-                        this.isAvatarSpeaking = true;
-                    } else if (evt.data === "SILENT") {
-                        this.emit("silent");
-                        this.isAvatarSpeaking = false;
-                    } else {
-                        const message = JSON.parse(evt.data);
-                        if (message.type === "answer") {
-                            answer = message;
-                        }
-                    }
-                } catch (e) {
-                    if (this.enableConsoleLogs) console.warn("SIMLI: Error processing WebSocket message:", e);
-                }
-            });
-
-            // Wait for WebSocket connection
-            await Promise.race([
-                wsConnectPromise,
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("SIMLI: WebSocket connection timeout")), 5000)
-                ),
-            ]);
 
             // Wait for answer with timeout
             let timeoutId: NodeJS.Timeout;
@@ -502,8 +465,8 @@ class SimliClient {
                 new Promise<void>((resolve, reject) => {
                     timeoutId = setTimeout(() => reject(new Error("Answer timeout")), 10000);
                     const checkAnswer = async () => {
-                        if (answer) {
-                            await this.pc!.setRemoteDescription(new RTCSessionDescription(answer));
+                        if (this.answer) {
+                            await this.pc!.setRemoteDescription(new RTCSessionDescription(this.answer));
                             clearTimeout(timeoutId);
                             resolve();
                         } else {
@@ -544,7 +507,7 @@ class SimliClient {
                     resolve();
                 } else {
                     this.prevCandidateCount = this.candidateCount;
-                    setTimeout(checkIceCandidates, 250);
+                    setTimeout(checkIceCandidates, 150);
                 }
             };
 
@@ -745,7 +708,68 @@ class SimliClient {
         };
     }
 
-    private setupWebSocketListeners(ws: WebSocket) {
+    private setupWebSocketListeners(ws: WebSocket, wsConnectResolve: () => void) {
+
+        ws.addEventListener("open", async () => {
+            wsConnectResolve();
+            while (!this.localDescription) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            await ws.send(JSON.stringify(this.localDescription));
+            const metadata = {
+                faceId: this.faceID,
+                isJPG: false,
+                apiKey: this.apiKey,
+                syncAudio: true,
+                handleSilence: this.handleSilence,
+                maxSessionLength: this.maxSessionLength,
+                maxIdleTime: this.maxIdleTime,
+            };
+            if (!this.session_token || this.session_token === "") {
+                await this.sendSessionToken((await this.createSessionToken(this.SimliURL, metadata)).session_token)
+            }
+            else {
+                await this.sendSessionToken(this.session_token);
+            }
+            this.startDataChannelInterval();
+        });
+
+
+
+        ws.addEventListener("message", async (evt) => {
+            if (this.enableConsoleLogs) console.log("SIMLI: Received message: ", evt.data);
+            try {
+                if (evt.data === "START") {
+                    this.sessionInitialized = true;
+                    this.sendAudioData(new Uint8Array(6000));
+                    this.emit("connected");
+                    console.log("START")
+                    console.log(new Date().getTime())
+                } else if (evt.data === "STOP") {
+                    this.close();
+                } else if (evt.data.startsWith("pong")) {
+                    const pingTime = this.pingSendTimes.get(evt.data.replace("pong", "ping"));
+                    if (pingTime) {
+                        if (this.enableConsoleLogs) console.log("SIMLI: Simli Latency: ", Date.now() - pingTime);
+                    }
+                } else if (evt.data === "ACK") {
+                    // if (this.enableConsoleLogs) console.log("SIMLI: Received ACK");
+                } else if (evt.data === "SPEAK") {
+                    this.emit("speaking");
+                    this.isAvatarSpeaking = true;
+                } else if (evt.data === "SILENT") {
+                    this.emit("silent");
+                    this.isAvatarSpeaking = false;
+                } else {
+                    const message = JSON.parse(evt.data);
+                    if (message.type === "answer") {
+                        this.answer = message;
+                    }
+                }
+            } catch (e) {
+                if (this.enableConsoleLogs) console.warn("SIMLI: Error processing WebSocket message:", e);
+            }
+        });
         ws.addEventListener("error", (error) => {
             if (this.enableConsoleLogs) console.error("SIMLI: WebSocket error:", error);
             this.emit("disconnected");
