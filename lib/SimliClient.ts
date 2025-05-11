@@ -164,8 +164,9 @@ class SimliClient {
 
     public async getIceServers(apiKey: string, SimliURL: string, attempt = 1): Promise<RTCIceServer[]> {
         try {
+            const url = `http${SimliURL}/getIceServers`;
             const response: any = await Promise.race([
-                fetch(`http${SimliURL}/getIceServers`, {
+                fetch(url, {
                     headers: { "Content-Type": "application/json" },
                     method: "POST",
                     body: JSON.stringify({ apiKey: apiKey }),
@@ -283,7 +284,8 @@ class SimliClient {
                 this.handleConnectionTimeout();
             }, this.CONNECTION_TIMEOUT_MS)
 
-            const ws = new WebSocket(`ws${this.SimliURL}/StartWebRTCSession`);
+            const url = `ws${this.SimliURL}/StartWebRTCSession`;
+            const ws = new WebSocket(url);
             this.webSocket = ws;
             const wsConnectPromise = new Promise<void>((resolve) => {
                 if (!this.webSocket) {
@@ -406,8 +408,9 @@ class SimliClient {
     public async createSessionToken(SimliURL: string, metadata: SimliSessionRequest): Promise<SimliSessionToken> {
         if (this.session_token && this.session_token !== "") { return { session_token: this.session_token } }
         try {
+            const url = `http${SimliURL}/startAudioToVideoSession`;
             const response = await fetch(
-                `http${SimliURL}/startAudioToVideoSession`,
+                url,
                 {
                     method: "POST",
                     body: JSON.stringify(metadata),
