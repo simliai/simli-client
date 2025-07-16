@@ -43,6 +43,8 @@ interface SimliClientConfig {
     audioRef: HTMLAudioElement;
     enableConsoleLogs?: boolean;
     SimliURL: string | "";
+    maxRetryAttempts: number | 100;
+    retryDelay_ms: number | 500;
 }
 interface SimliSessionRequest {
     faceId: string;
@@ -90,8 +92,8 @@ class SimliClient {
     private pingSendTimes: Map<string, number> = new Map();
     private webSocket: WebSocket | null = null;
     private lastSendTime: number = 0;
-    private readonly MAX_RETRY_ATTEMPTS = 3;
-    private readonly RETRY_DELAY = 1500;
+    private MAX_RETRY_ATTEMPTS = 100;
+    private RETRY_DELAY = 500;
     private connectionTimeout: NodeJS.Timeout | null = null;
     private readonly CONNECTION_TIMEOUT_MS = 15000;
     private SimliURL: string = "";
@@ -99,6 +101,8 @@ class SimliClient {
     public enableConsoleLogs: boolean = false;
     // Event handling
     private events: EventMap = new Map();
+    private retryAttempt: number = 1;
+    private inputIceServers: RTCIceServer[] = [];
 
     // Type-safe event methods
     public on<K extends keyof SimliClientEvents>(
@@ -132,6 +136,7 @@ class SimliClient {
             console.error("SIMLI: apiKey or session_token is required in config");
             throw new Error("apiKey or session_token is required in config");
         }
+
         this.apiKey = config.apiKey;
         this.faceID = config.faceID;
         this.handleSilence = config.handleSilence;
@@ -139,6 +144,8 @@ class SimliClient {
         this.maxIdleTime = config.maxIdleTime;
         this.enableConsoleLogs = config.enableConsoleLogs ?? false;
         this.session_token = config.session_token;
+        this.MAX_RETRY_ATTEMPTS = config.maxRetryAttempts;
+        this.RETRY_DELAY = config.retryDelay_ms;
         if (!config.SimliURL || config.SimliURL === "") {
             this.SimliURL = "s://api.simli.ai";
         }
@@ -199,6 +206,10 @@ class SimliClient {
     }
 
     private async createPeerConnection(iceServers: RTCIceServer[] = []) {
+        if (this.pc) {
+            this.pc.close()
+
+        }
         const config = {
             sdpSemantics: "unified-plan",
             iceServers: iceServers,
@@ -222,7 +233,13 @@ class SimliClient {
         this.pc.addEventListener("iceconnectionstatechange", () => {
             if (this.enableConsoleLogs) console.log("SIMLI: ICE connection state changed: ", this.pc?.iceConnectionState);
             if (this.pc?.iceConnectionState === "failed") {
-                this.handleConnectionFailure("ICE connection failed");
+                if (this.retryAttempt < this.MAX_RETRY_ATTEMPTS) {
+                    this.retryAttempt += 1;
+                    this.start(this.inputIceServers, this.retryAttempt)
+                }
+                else {
+                    this.handleConnectionFailure("ICE connection failed");
+                }
             }
         });
 
@@ -278,22 +295,13 @@ class SimliClient {
     ): Promise<void> {
         try {
             this.clearTimeouts();
-
             // Set overall connection timeout
             this.connectionTimeout = setTimeout(() => {
                 this.handleConnectionTimeout();
             }, this.CONNECTION_TIMEOUT_MS)
 
-            const url = `ws${this.SimliURL}/StartWebRTCSession`;
-            const ws = new WebSocket(url);
-            this.webSocket = ws;
-            const wsConnectPromise = new Promise<void>((resolve) => {
-                if (!this.webSocket) {
-                    return
-                }
-                this.setupWebSocketListeners(this.webSocket, resolve);
-            });
 
+            this.inputIceServers = iceServers
             if (iceServers.length === 0) {
                 const metadata = {
                     faceId: this.faceID,
@@ -312,7 +320,15 @@ class SimliClient {
                 iceServers = sessionRunData[0]
                 this.session_token = sessionRunData[1].session_token
             }
-
+            const url = `ws${this.SimliURL}/StartWebRTCSession`;
+            const ws = new WebSocket(url);
+            this.webSocket = ws;
+            const wsConnectPromise = new Promise<void>((resolve) => {
+                if (!this.webSocket) {
+                    return
+                }
+                this.setupWebSocketListeners(this.webSocket, resolve);
+            });
             // Wait for WebSocket connection
             await Promise.race([
                 wsConnectPromise,
@@ -320,8 +336,8 @@ class SimliClient {
                     setTimeout(() => reject(new Error("SIMLI: WebSocket connection timeout")), 5000)
                 ),
             ]);
-
             await this.createPeerConnection(iceServers);
+
 
             const parameters = { ordered: true };
             this.dc = this.pc!.createDataChannel("chat", parameters);
@@ -340,11 +356,12 @@ class SimliClient {
             if (this.enableConsoleLogs) console.error(`SIMLI: Connection attempt ${retryAttempt} failed:`, error);
             this.clearTimeouts();
 
-            if (retryAttempt < this.MAX_RETRY_ATTEMPTS) {
+            if (this.retryAttempt < this.MAX_RETRY_ATTEMPTS) {
                 if (this.enableConsoleLogs) console.log(`SIMLI: Retrying connection... Attempt ${retryAttempt + 1}`);
                 await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
                 await this.cleanup();
-                return this.start(iceServers, retryAttempt + 1);
+                this.retryAttempt += 1;
+                return this.start(iceServers, this.retryAttempt);
             }
 
             this.emit("failed", `Failed to connect after ${this.MAX_RETRY_ATTEMPTS} attempts`);
@@ -777,6 +794,7 @@ class SimliClient {
             if (this.enableConsoleLogs) console.error("SIMLI: WebSocket error:", error);
             this.emit("disconnected");
             this.handleConnectionFailure("WebSocket error");
+
         });
 
         ws.addEventListener("close", () => {
