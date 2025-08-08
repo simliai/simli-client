@@ -45,6 +45,7 @@ interface SimliClientConfig {
     SimliURL: string | "";
     maxRetryAttempts: number | 100;
     retryDelay_ms: number | 500;
+    model: "fasttalk" | "artalk" | "";
 }
 interface SimliSessionRequest {
     faceId: string;
@@ -54,6 +55,7 @@ interface SimliSessionRequest {
     handleSilence: boolean;
     maxSessionLength: number;
     maxIdleTime: number;
+    model: "fasttalk" | "artalk"
 }
 
 interface SimliSessionToken {
@@ -89,6 +91,7 @@ class SimliClient {
     private localDescription: RTCSessionDescription | null = null;
     private maxSessionLength: number = 3600;
     private maxIdleTime: number = 600;
+    private model: "fasttalk" | "artalk" = "artalk";
     private pingSendTimes: Map<string, number> = new Map();
     private webSocket: WebSocket | null = null;
     private lastSendTime: number = 0;
@@ -146,6 +149,9 @@ class SimliClient {
         this.session_token = config.session_token;
         this.MAX_RETRY_ATTEMPTS = config.maxRetryAttempts;
         this.RETRY_DELAY = config.retryDelay_ms;
+        if (config.model !== "") {
+            this.model = config.model;
+        }
         if (!config.SimliURL || config.SimliURL === "") {
             this.SimliURL = "s://api.simli.ai";
         }
@@ -311,6 +317,7 @@ class SimliClient {
                     handleSilence: this.handleSilence,
                     maxSessionLength: this.maxSessionLength,
                     maxIdleTime: this.maxIdleTime,
+                    model: this.model
                 };
                 // Get All POST request related data at the same time
                 const sessionRunData = await Promise.all
@@ -744,6 +751,7 @@ class SimliClient {
                 handleSilence: this.handleSilence,
                 maxSessionLength: this.maxSessionLength,
                 maxIdleTime: this.maxIdleTime,
+		model: this.model,
             };
             if (!this.session_token || this.session_token === "") {
                 await this.sendSessionToken((await this.createSessionToken(this.SimliURL, metadata)).session_token)
