@@ -688,6 +688,45 @@ class SimliClient {
         }
     }
 
+    sendAudioDataImmediate(audioData: Uint8Array) {
+        if (!this.sessionInitialized) {
+            if (this.enableConsoleLogs) console.log("SIMLI: Session not initialized. Ignoring audio data.");
+            return;
+        }
+
+        if (this.webSocket?.readyState !== WebSocket.OPEN) {
+            if (this.enableConsoleLogs) console.error(
+                "SIMLI: WebSocket is not open. Current state:",
+                this.webSocket?.readyState,
+                "Error Reason:",
+                this.errorReason
+            );
+            return;
+        }
+
+        try {
+            const asciiStr = "PLAY_IMMEDIATE";
+            const encoder = new TextEncoder(); // Default is utf-8
+            const strBytes = encoder.encode(asciiStr); // Uint8Array of " World!"
+
+            const buffer = new Uint8Array(strBytes.length + audioData.length);
+            buffer.set(strBytes, 0);
+            buffer.set(audioData, strBytes.length);
+            this.webSocket.send(buffer);
+            const currentTime = Date.now();
+            if (this.lastSendTime !== 0) {
+                const timeBetweenSends = currentTime - this.lastSendTime;
+                if (timeBetweenSends > 100) { // Log only if significant delay
+                    if (this.enableConsoleLogs) console.log("SIMLI: Time between sends:", timeBetweenSends);
+                }
+            }
+            this.lastSendTime = currentTime;
+        } catch (error) {
+            if (this.enableConsoleLogs) console.error("SIMLI: Failed to send audio data:", error);
+            this.handleConnectionFailure("Failed to send audio data");
+        }
+    }
+
     close() {
         if (this.enableConsoleLogs) console.log("SIMLI: Closing SimliClient connection");
         this.emit("disconnected");
@@ -751,7 +790,7 @@ class SimliClient {
                 handleSilence: this.handleSilence,
                 maxSessionLength: this.maxSessionLength,
                 maxIdleTime: this.maxIdleTime,
-		model: this.model,
+                model: this.model,
             };
             if (!this.session_token || this.session_token === "") {
                 await this.sendSessionToken((await this.createSessionToken(this.SimliURL, metadata)).session_token)
