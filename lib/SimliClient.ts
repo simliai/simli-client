@@ -106,6 +106,7 @@ class SimliClient {
     private events: EventMap = new Map();
     private retryAttempt: number = 1;
     private inputIceServers: RTCIceServer[] = [];
+    public config: SimliClientConfig | null = null;
 
     // Type-safe event methods
     public on<K extends keyof SimliClientEvents>(
@@ -139,7 +140,7 @@ class SimliClient {
             console.error("SIMLI: apiKey or session_token is required in config");
             throw new Error("apiKey or session_token is required in config");
         }
-
+        this.config = config;
         this.apiKey = config.apiKey;
         this.faceID = config.faceID;
         this.handleSilence = config.handleSilence;
@@ -167,7 +168,7 @@ class SimliClient {
             if (!(this.audioRef instanceof HTMLAudioElement)) {
                 console.error("SIMLI: audioRef is required in config as HTMLAudioElement");
             }
-            console.log("SIMLI: simli-client@1.2.8 initialized");
+            console.log("SIMLI: simli-client@1.2.14 initialized");
         } else {
             console.warn(
                 "SIMLI: Running in Node.js environment. Some features may not be available."
@@ -300,6 +301,7 @@ class SimliClient {
         iceServers: RTCIceServer[] = [], retryAttempt = 1
     ): Promise<void> {
         try {
+            await this.cleanup()
             this.clearTimeouts();
             // Set overall connection timeout
             this.connectionTimeout = setTimeout(() => {
@@ -320,10 +322,12 @@ class SimliClient {
                     model: this.model
                 };
                 // Get All POST request related data at the same time
-                const sessionRunData = await Promise.all
-                    ([this.getIceServers(this.apiKey, this.SimliURL), this.createSessionToken(this.SimliURL, metadata),
-
-                    ])
+                const sessionRunData = await Promise.all(
+                    [
+                        this.getIceServers(this.apiKey, this.SimliURL),
+                        this.createSessionToken(this.SimliURL, metadata),
+                    ]
+                )
                 iceServers = sessionRunData[0]
                 this.session_token = sessionRunData[1].session_token
             }
@@ -488,6 +492,7 @@ class SimliClient {
 
             // Wait for answer with timeout
             let timeoutId: NodeJS.Timeout;
+            this.answer = null
             await Promise.race([
                 new Promise<void>((resolve, reject) => {
                     timeoutId = setTimeout(() => reject(new Error("Answer timeout")), 10000);
@@ -515,6 +520,8 @@ class SimliClient {
 
     private async waitForIceGathering(): Promise<void> {
         if (!this.pc) return;
+        this.candidateCount = 0;
+        this.prevCandidateCount = 0;
 
         if (this.pc.iceGatheringState === "complete") {
             return;
@@ -566,10 +573,6 @@ class SimliClient {
     }
 
     private async cleanup() {
-        this.clearTimeouts();
-        this.stopDataChannelInterval();
-        this.events.clear();
-
         if (this.webSocket) {
             this.webSocket.close();
             this.webSocket = null;
@@ -598,7 +601,24 @@ class SimliClient {
         this.sessionInitialized = false;
         this.candidateCount = 0;
         this.prevCandidateCount = -1;
-        this.errorReason = null;
+
+        this.videoRef = null;
+        this.audioRef = null;
+
+        this.answer = null;
+        this.localDescription = null;
+
+        this.pingSendTimes = new Map();
+        // Event handling
+        this.retryAttempt = 1;
+        this.inputIceServers = [];
+        this.clearTimeouts();
+        this.stopDataChannelInterval();
+        this.answer = null
+        if (this.config) {
+            this.Initialize(this.config);
+        }
+
     }
 
     private clearTimeouts() {
