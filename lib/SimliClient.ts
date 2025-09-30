@@ -44,7 +44,8 @@ interface SimliClientConfig {
     enableConsoleLogs?: boolean;
     SimliURL: string | "";
     maxRetryAttempts: number | 100;
-    retryDelay_ms: number | 500;
+    retryDelay_ms: number | 2000;
+    videoReceivedTimeout: number | 15000;
     model: "fasttalk" | "artalk" | "";
 }
 interface SimliSessionRequest {
@@ -96,7 +97,8 @@ class SimliClient {
     private webSocket: WebSocket | null = null;
     private lastSendTime: number = 0;
     private MAX_RETRY_ATTEMPTS = 100;
-    private RETRY_DELAY = 500;
+    private RETRY_DELAY = 2000;
+    private VIDEO_TIMEOUT = 15000;
     private connectionTimeout: NodeJS.Timeout | null = null;
     private readonly CONNECTION_TIMEOUT_MS = 15000;
     private SimliURL: string = "";
@@ -148,8 +150,9 @@ class SimliClient {
         this.maxIdleTime = config.maxIdleTime;
         this.enableConsoleLogs = config.enableConsoleLogs ?? false;
         this.session_token = config.session_token;
-        this.MAX_RETRY_ATTEMPTS = config.maxRetryAttempts;
-        this.RETRY_DELAY = config.retryDelay_ms;
+        this.MAX_RETRY_ATTEMPTS = config.maxRetryAttempts ?? this.MAX_RETRY_ATTEMPTS;
+        this.RETRY_DELAY = config.retryDelay_ms ?? this.RETRY_DELAY;
+        this.VIDEO_TIMEOUT = config.videoReceivedTimeout ?? this.VIDEO_TIMEOUT;
         if (config.model !== "") {
             this.model = config.model;
         }
@@ -168,7 +171,7 @@ class SimliClient {
             if (!(this.audioRef instanceof HTMLAudioElement)) {
                 console.error("SIMLI: audioRef is required in config as HTMLAudioElement");
             }
-            console.log("SIMLI: simli-client@1.2.14 initialized");
+            console.log("SIMLI: simli-client@1.2.15 initialized");
         } else {
             console.warn(
                 "SIMLI: Running in Node.js environment. Some features may not be available."
@@ -212,7 +215,7 @@ class SimliClient {
         }
     }
 
-    private async createPeerConnection(iceServers: RTCIceServer[] = []) {
+    private async createPeerConnection(iceServers: RTCIceServer[] = [], videoReceivedPromise: () => void) {
         if (this.pc) {
             this.pc.close()
 
@@ -226,11 +229,11 @@ class SimliClient {
         this.pc = new window.RTCPeerConnection(config);
 
         if (this.pc) {
-            this.setupPeerConnectionListeners();
+            this.setupPeerConnectionListeners(videoReceivedPromise);
         }
     }
 
-    private setupPeerConnectionListeners() {
+    private setupPeerConnectionListeners(videoReceivedResolve: () => void) {
         if (!this.pc) return;
 
         this.pc.addEventListener("icegatheringstatechange", () => {
@@ -258,6 +261,9 @@ class SimliClient {
             if (this.enableConsoleLogs) console.log("SIMLI: Track event: ", evt.track.kind);
             if (evt.track.kind === "video" && this.videoRef) {
                 this.videoRef.srcObject = evt.streams[0];
+                this.videoRef.requestVideoFrameCallback(() => {
+                    videoReceivedResolve()
+                })
             } else if (evt.track.kind === "audio" && this.audioRef) {
                 this.audioRef.srcObject = evt.streams[0];
             }
@@ -347,19 +353,30 @@ class SimliClient {
                     setTimeout(() => reject(new Error("SIMLI: WebSocket connection timeout")), 5000)
                 ),
             ]);
-            await this.createPeerConnection(iceServers);
 
+            const videoReceivedPromise = new Promise<void>(async (resolve, reject) => {
+                try {
+                    await this.createPeerConnection(iceServers, resolve);
+                    const parameters = { ordered: true };
+                    this.dc = this.pc!.createDataChannel("chat", parameters);
 
-            const parameters = { ordered: true };
-            this.dc = this.pc!.createDataChannel("chat", parameters);
-
-            this.setupDataChannelListeners();
-            this.setupConnectionStateHandler();
-            this.pc?.addTransceiver("audio", { direction: "recvonly" });
-            this.pc?.addTransceiver("video", { direction: "recvonly" });
-
-            await this.negotiate();
-
+                    this.setupDataChannelListeners();
+                    this.setupConnectionStateHandler();
+                    this.pc?.addTransceiver("audio", { direction: "recvonly" });
+                    this.pc?.addTransceiver("video", { direction: "recvonly" });
+                    await this.negotiate();
+                }
+                catch (error) {
+                    reject()
+                }
+            })
+            await Promise.race([
+                videoReceivedPromise,
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("SIMLI: Video connection timeout")), this.VIDEO_TIMEOUT)
+                ),
+            ]);
+            console.log("CONNECTED")
             // Clear timeout if connection successful
             this.clearTimeouts();
 
@@ -369,8 +386,8 @@ class SimliClient {
 
             if (this.retryAttempt < this.MAX_RETRY_ATTEMPTS) {
                 if (this.enableConsoleLogs) console.log(`SIMLI: Retrying connection... Attempt ${retryAttempt + 1}`);
-                await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
                 await this.cleanup();
+                await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
                 this.retryAttempt += 1;
                 return this.start(iceServers, this.retryAttempt);
             }
@@ -495,12 +512,16 @@ class SimliClient {
             this.answer = null
             await Promise.race([
                 new Promise<void>((resolve, reject) => {
-                    timeoutId = setTimeout(() => reject(new Error("Answer timeout")), 10000);
+                    timeoutId = setTimeout(() => reject(new Error("Answer timeout A")), 10000);
                     const checkAnswer = async () => {
+                        if (!this.pc) {
+                            reject()
+                            return
+                        }
                         if (this.answer) {
-                            await this.pc!.setRemoteDescription(new RTCSessionDescription(this.answer));
                             clearTimeout(timeoutId);
                             resolve();
+                            await this.pc!.setRemoteDescription(new RTCSessionDescription(this.answer));
                         } else {
                             setTimeout(checkAnswer, 100);
                         }
@@ -508,7 +529,7 @@ class SimliClient {
                     checkAnswer();
                 }),
                 new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("SIMLI: Answer timeout")), 10000)
+                    setTimeout(() => reject(new Error("SIMLI: Answer timeout B")), 10000)
                 ),
             ]);
 
@@ -573,6 +594,11 @@ class SimliClient {
     }
 
     private async cleanup() {
+        if (this.videoRef)
+            this.videoRef.srcObject = null
+        if (this.audioRef)
+            this.audioRef.srcObject = null
+
         if (this.webSocket) {
             this.webSocket.close();
             this.webSocket = null;
@@ -610,7 +636,6 @@ class SimliClient {
 
         this.pingSendTimes = new Map();
         // Event handling
-        this.retryAttempt = 1;
         this.inputIceServers = [];
         this.clearTimeouts();
         this.stopDataChannelInterval();
@@ -749,6 +774,8 @@ class SimliClient {
 
     close() {
         if (this.enableConsoleLogs) console.log("SIMLI: Closing SimliClient connection");
+        if (this.webSocket)
+            this.webSocket.send("DONE")
         this.emit("disconnected");
 
         try {
