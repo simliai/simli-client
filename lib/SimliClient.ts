@@ -103,6 +103,7 @@ class SimliClient {
     private connectionTimeout: NodeJS.Timeout | null = null;
     private readonly CONNECTION_TIMEOUT_MS = 15000;
     private SimliURL: string = "";
+    private enableSFU: boolean = true;
     public isAvatarSpeaking: boolean = false;
     public enableConsoleLogs: boolean = false;
     // Event handling
@@ -160,6 +161,8 @@ class SimliClient {
             config.maxRetryAttempts ?? this.MAX_RETRY_ATTEMPTS;
         this.RETRY_DELAY = config.retryDelay_ms ?? this.RETRY_DELAY;
         this.VIDEO_TIMEOUT = config.videoReceivedTimeout ?? this.VIDEO_TIMEOUT;
+        if (config.enableSFU)
+            this.enableSFU = config.enableSFU;
         if (config.model !== "") {
             this.model = config.model;
         }
@@ -383,7 +386,7 @@ class SimliClient {
                 iceServers = sessionRunData[0];
                 this.session_token = sessionRunData[1].session_token;
             }
-            const url = `ws${this.SimliURL}/StartWebRTCSession`;
+            const url = `ws${this.SimliURL}/StartWebRTCSession?enableSFU=${this.enableSFU}`;
             const ws = new WebSocket(url);
             this.webSocket = ws;
             const wsConnectPromise = new Promise<void>((resolve) => {

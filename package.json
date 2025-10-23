@@ -1,38 +1,38 @@
 {
-  "name": "simli-client",
-  "version": "1.2.15",
-  "description": "Simli WebRTC Client",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "scripts": {
-    "build": "tsc",
-    "test": "jest"
-  },
-  "keywords": [
-    "simli",
-    "webrtc",
-    "faces",
-    "ai"
-  ],
-  "author": "Simli",
-  "license": "MIT",
-  "files": [
-    "/dist",
-    "/lib"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/simliai/simli-client.git"
-  },
-  "bugs": {
-    "url": "https://github.com/simliai/simli-client/issues"
-  },
-  "homepage": "https://github.com/simliai/simli-client#readme",
-  "devDependencies": {
-    "@types/node": "^20.14.11",
-    "@types/react": "^18.3.3",
-    "terser-webpack-plugin": "^5.3.11",
-    "ts-loader": "^9.5.2",
-    "typescript": "^5.7.3"
-  }
+    "name": "simli-client",
+    "version": "1.2.16",
+    "description": "Simli WebRTC Client",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "test": "jest"
+    },
+    "keywords": [
+        "simli",
+        "webrtc",
+        "faces",
+        "ai"
+    ],
+    "author": "Simli",
+    "license": "MIT",
+    "files": [
+        "/dist",
+        "/lib"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/simliai/simli-client.git"
+    },
+    "bugs": {
+        "url": "https://github.com/simliai/simli-client/issues"
+    },
+    "homepage": "https://github.com/simliai/simli-client#readme",
+    "devDependencies": {
+        "@types/node": "^20.14.11",
+        "@types/react": "^18.3.3",
+        "terser-webpack-plugin": "^5.3.11",
+        "ts-loader": "^9.5.2",
+        "typescript": "^5.7.3"
+    }
 }
