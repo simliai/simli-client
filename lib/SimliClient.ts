@@ -116,7 +116,7 @@ class SimliClient {
     // Type-safe event methods
     public on<K extends keyof SimliClientEvents>(
         event: K,
-        callback: SimliClientEvents[K],
+        callback: SimliClientEvents[K]
     ): void {
         if (!this.events.has(event)) {
             this.events.set(event, new Set());
@@ -145,7 +145,9 @@ class SimliClient {
             (!config.apiKey || config.apiKey === "") &&
             (!config.session_token || config.session_token === "")
         ) {
-            console.error("SIMLI: apiKey or session_token is required in config");
+            console.error(
+                "SIMLI: apiKey or session_token is required in config"
+            );
             throw new Error("apiKey or session_token is required in config");
         }
         this.config = config;
@@ -915,17 +917,17 @@ class SimliClient {
                 await new Promise((resolve) => setTimeout(resolve, 50));
             }
             await ws.send(JSON.stringify(this.localDescription));
-            const metadata = {
-                faceId: this.faceID,
-                isJPG: false,
-                apiKey: this.apiKey,
-                syncAudio: true,
-                handleSilence: this.handleSilence,
-                maxSessionLength: this.maxSessionLength,
-                maxIdleTime: this.maxIdleTime,
-                model: this.model,
-            };
             if (!this.session_token || this.session_token === "") {
+                const metadata = {
+                    faceId: this.faceID,
+                    isJPG: false,
+                    apiKey: this.apiKey,
+                    syncAudio: true,
+                    handleSilence: this.handleSilence,
+                    maxSessionLength: this.maxSessionLength,
+                    maxIdleTime: this.maxIdleTime,
+                    model: this.model,
+                };
                 await this.sendSessionToken(
                     (await this.createSessionToken(this.SimliURL, metadata))
                         .session_token,
@@ -964,6 +966,25 @@ class SimliClient {
                 } else if (evt.data === "SILENT") {
                     this.emit("silent");
                     this.isAvatarSpeaking = false;
+                } else if (evt.data === "MISSING_SESSION_TOKEN") {
+                    if (!this.session_token || this.session_token === "") {
+                        const metadata = {
+                            faceId: this.faceID,
+                            isJPG: false,
+                            apiKey: this.apiKey,
+                            syncAudio: true,
+                            handleSilence: this.handleSilence,
+                            maxSessionLength: this.maxSessionLength,
+                            maxIdleTime: this.maxIdleTime,
+                            model: this.model,
+                        };
+                        await this.sendSessionToken(
+                            (await this.createSessionToken(this.SimliURL, metadata))
+                                .session_token,
+                        );
+                    } else {
+                        await this.sendSessionToken(this.session_token);
+                    }
                 } else {
                     const message = JSON.parse(evt.data);
                     if (message.type === "answer") {
