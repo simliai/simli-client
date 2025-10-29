@@ -184,7 +184,7 @@ class SimliClient {
                     "SIMLI: audioRef is required in config as HTMLAudioElement",
                 );
             }
-            console.log("SIMLI: simli-client@1.2.15 initialized");
+            console.log("SIMLI: simli-client@1.2.20 initialized");
         } else {
             console.warn(
                 "SIMLI: Running in Node.js environment. Some features may not be available.",
@@ -334,10 +334,10 @@ class SimliClient {
                     this.clearTimeouts();
                     break;
                 case "failed":
+                    this.emit("failed", "Connection failed");
                 case "closed":
                     if (this.videoReceived) {
                         this.emit("disconnected");
-                        this.emit("failed", "Connection failed or closed");
                     }
                     this.cleanup();
                     break;
@@ -654,7 +654,9 @@ class SimliClient {
         this.errorReason = reason;
         if (this.enableConsoleLogs)
             console.error("SIMLI: connection failure:", reason);
-        this.emit("failed", reason);
+        if (this.retryAttempt >= this.MAX_RETRY_ATTEMPTS) {
+            this.emit("failed", reason);
+        }
         this.cleanup();
     }
 
@@ -667,11 +669,13 @@ class SimliClient {
             if (this.enableConsoleLogs)
                 console.log("SIMLI: Connection lost, attempting to reconnect...");
             this.cleanup()
-                .then(() => this.start())
+                .then(() => this.start(this.inputIceServers, this.retryAttempt))
                 .catch((error) => {
                     if (this.enableConsoleLogs)
                         console.error("SIMLI: Reconnection failed:", error);
-                    this.emit("failed", "Reconnection failed");
+                    if (this.retryAttempt >= this.MAX_RETRY_ATTEMPTS) {
+                        this.emit("failed", "Reconnection failed");
+                    }
                 });
         }
     }
@@ -744,7 +748,9 @@ class SimliClient {
         } catch (error) {
             if (this.enableConsoleLogs)
                 console.error("SIMLI: Failed to initialize audio stream:", error);
-            this.emit("failed", "Audio initialization failed");
+            if (this.retryAttempt >= this.MAX_RETRY_ATTEMPTS) {
+                this.emit("failed", "Audio initialization failed");
+            }
         }
     }
 
@@ -781,7 +787,9 @@ class SimliClient {
             .catch((error) => {
                 if (this.enableConsoleLogs)
                     console.error("SIMLI: Failed to initialize AudioWorklet:", error);
-                this.emit("failed", "AudioWorklet initialization failed");
+                if (this.retryAttempt >= this.MAX_RETRY_ATTEMPTS) {
+                    this.emit("failed", "AudioWorklet initialization failed");
+                }
             });
     }
 
@@ -1012,11 +1020,13 @@ class SimliClient {
                 this.handleConnectionFailure("WebSocket error");
             } else {
                 this.cleanup()
-                    .then(() => this.start())
+                    .then(() => this.start(this.inputIceServers, this.retryAttempt))
                     .catch((error) => {
                         if (this.enableConsoleLogs)
                             console.error("SIMLI: Reconnection failed:", error);
-                        this.emit("failed", "Reconnection failed");
+                        if (this.retryAttempt >= this.MAX_RETRY_ATTEMPTS) {
+                            this.emit("failed", "Reconnection failed");
+                        }
                     });
             }
         });
