@@ -162,7 +162,7 @@ class SimliClient {
             config.maxRetryAttempts ?? this.MAX_RETRY_ATTEMPTS;
         this.RETRY_DELAY = config.retryDelay_ms ?? this.RETRY_DELAY;
         this.VIDEO_TIMEOUT = config.videoReceivedTimeout ?? this.VIDEO_TIMEOUT;
-        if (config.enableSFU) this.enableSFU = config.enableSFU;
+        if (config.enableSFU !== undefined) this.enableSFU = config.enableSFU;
         if (config.model !== "") {
             this.model = config.model;
         }
@@ -335,13 +335,17 @@ class SimliClient {
                     break;
                 case "failed":
                 case "closed":
-                    this.emit("disconnected");
-                    this.emit("failed", "Connection failed or closed");
+                    if (this.videoReceived) {
+                        this.emit("disconnected");
+                        this.emit("failed", "Connection failed or closed");
+                    }
                     this.cleanup();
                     break;
                 case "disconnected":
-                    this.emit("disconnected");
-                    this.handleDisconnection();
+                    if (this.videoReceived) {
+                        this.emit("disconnected");
+                        this.handleDisconnection();
+                    }
                     break;
             }
         });
@@ -465,14 +469,18 @@ class SimliClient {
 
         this.dc.addEventListener("close", () => {
             if (this.enableConsoleLogs) console.log("SIMLI: Data channel closed");
-            this.emit("disconnected");
-            this.stopDataChannelInterval();
+            if (this.videoReceived) {
+                this.emit("disconnected");
+                this.stopDataChannelInterval();
+            }
         });
 
         this.dc.addEventListener("error", (error) => {
-            if (this.enableConsoleLogs)
-                console.error("SIMLI: Data channel error:", error);
-            this.emit("disconnected");
+            if (this.videoReceived) {
+                if (this.enableConsoleLogs)
+                    console.error("SIMLI: Data channel error:", error);
+                this.emit("disconnected");
+            }
             this.handleConnectionFailure("Data channel error");
         });
     }
