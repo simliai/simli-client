@@ -184,7 +184,8 @@ class SimliClient {
                     "SIMLI: audioRef is required in config as HTMLAudioElement",
                 );
             }
-            console.log("SIMLI: simli-client@1.2.20 initialized");
+            if (this.enableConsoleLogs)
+                console.log("SIMLI: simli-client@1.2.20 initialized");
         } else {
             console.warn(
                 "SIMLI: Running in Node.js environment. Some features may not be available.",
@@ -434,7 +435,7 @@ class SimliClient {
                 ),
             ]);
             this.videoReceived = true;
-            console.log("CONNECTED");
+            if (this.enableConsoleLogs) console.log("CONNECTED");
             // Clear timeout if connection successful
             this.clearTimeouts();
         } catch (error) {
@@ -725,9 +726,10 @@ class SimliClient {
         this.clearTimeouts();
         this.stopDataChannelInterval();
         this.answer = null;
-        if (this.config) {
-            this.Initialize(this.config);
-        }
+        // REMOVED: Auto-reinitialization causes loops when connections close
+        // if (this.config) {
+        //     this.Initialize(this.config);
+        // }
     }
 
     private clearTimeouts() {
@@ -962,8 +964,10 @@ class SimliClient {
                     this.sessionInitialized = true;
                     this.sendAudioData(new Uint8Array(6000));
                     this.emit("connected");
-                    console.log("START");
-                    console.log(new Date().getTime());
+                    if (this.enableConsoleLogs) {
+                        console.log("START");
+                        console.log(new Date().getTime());
+                    }
                 } else if (evt.data === "STOP") {
                     this.close();
                 } else if (evt.data.startsWith("pong")) {
