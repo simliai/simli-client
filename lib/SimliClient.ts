@@ -435,7 +435,9 @@ class SimliClient {
                 ),
             ]);
             this.videoReceived = true;
-            if (this.enableConsoleLogs) console.log("CONNECTED");
+            if (this.enableConsoleLogs) {
+                console.log("CONNECTED");
+            }
             // Clear timeout if connection successful
             this.clearTimeouts();
         } catch (error) {
@@ -714,8 +716,9 @@ class SimliClient {
         this.candidateCount = 0;
         this.prevCandidateCount = -1;
 
-        this.videoRef = null;
-        this.audioRef = null;
+        // DON'T null out videoRef/audioRef - they're needed for reconnection
+        // this.videoRef = null;
+        // this.audioRef = null;
 
         this.answer = null;
         this.localDescription = null;
@@ -726,10 +729,7 @@ class SimliClient {
         this.clearTimeouts();
         this.stopDataChannelInterval();
         this.answer = null;
-        // REMOVED: Auto-reinitialization causes loops when connections close
-        // if (this.config) {
-        //     this.Initialize(this.config);
-        // }
+        // DON'T auto-reinitialize - caller will handle restart if needed
     }
 
     private clearTimeouts() {
