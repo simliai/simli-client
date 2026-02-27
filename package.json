@@ -1,6 +1,6 @@
 {
     "name": "simli-client",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "description": "Simli WebRTC Client",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",

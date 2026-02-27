@@ -73,6 +73,7 @@ async function handleMessage(transport: BaseTransport, message: MessageEvent): P
             } else if (firstToken.includes("VIDEO_METADATA")) {
                 transport.emit("video_info", message.data)
             } else if (firstToken.includes("ENDFRAME")) {
+                transport.emit("stop")
                 transport.disconnect()
             } else if (firstToken.includes("DESTINATION")) {
                 transport.emit("destination", message.data)
