@@ -47,7 +47,7 @@ class LivekitTransport implements BaseTransport {
                 this.websocketReject = null; // Prevent multiple rejections
             }
         }
-        const options: RoomOptions = { adaptiveStream: true, dynacast: true }
+        const options: RoomOptions = { adaptiveStream: false, dynacast: true }
         this.pc = new Room(options);
         this.on("connection_info", (serialized_info) => this.join_lk_room(serialized_info))
         this.videoElementAnchor = videoElementAnchor

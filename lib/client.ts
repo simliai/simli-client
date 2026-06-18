@@ -187,6 +187,7 @@ class SimliClient {
         if (!(SimliWSURL.startsWith("ws://") || SimliWSURL.startsWith("wss://")) || SimliWSURL.endsWith("/")) {
             throw "Invalid Simli WS URL"
         }
+        this.audioBufferSize = audioBufferSize
         this.session_token = session_token
         this.transport = transport_mode
         this.signaling = signaling
@@ -308,12 +309,24 @@ class SimliClient {
     }
 
     listenToMediastreamTrack(stream: MediaStreamTrack) {
-        this.initializeAudioWorklet(this.audioContext, stream);
+        const source = this.audioContext.createMediaStreamSource(
+            new MediaStream([stream]),
+        );
+        this.sourceNode = source;
+        this.attachSourceToWorklet(this.audioContext, source);
     }
 
-    private initializeAudioWorklet(
+    listenToAudioElement(audioEl: HTMLAudioElement) {
+        const source = this.audioContext.createMediaElementSource(audioEl);
+        // No connection to audioContext.destination on purpose: createMediaElementSource
+        // reroutes the element's audio into the graph, so leaving the destination
+        // unconnected silences the <audio> while samples still flow to Simli.
+        this.attachSourceToWorklet(this.audioContext, source);
+    }
+
+    private attachSourceToWorklet(
         audioContext: AudioContext,
-        stream: MediaStreamTrack,
+        source: AudioNode,
     ) {
         audioContext.audioWorklet
             .addModule(
@@ -328,13 +341,10 @@ class SimliClient {
                     audioContext,
                     "audio-processor",
                 );
-                this.sourceNode = audioContext.createMediaStreamSource(
-                    new MediaStream([stream]),
-                );
                 if (this.audioWorklet === null) {
                     throw new Error("SIMLI: AudioWorklet not initialized");
                 }
-                this.sourceNode.connect(this.audioWorklet);
+                source.connect(this.audioWorklet);
                 this.audioWorklet.port.onmessage = (event) => {
                     if (event.data.type === "audioData") {
                         this.connection.signalingConnection.sendAudioData(new Uint8Array(event.data.data.buffer));
