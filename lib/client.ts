@@ -41,13 +41,59 @@ const AudioProcessor = (buffer: number) => {
         registerProcessor('audio-processor', AudioProcessor);
       `};
 
+// Camera offsets on top of the avatar's own framing, Trinity-2 faces only.
+// Every field is neutral when left out. A value outside its supported range
+// is still applied, with a warning in the token response.
+interface CameraSetting {
+    /** Moves the avatar right, in half canvas widths. Supported range -10 to 10. */
+    pos_x_off?: number;
+    /** Moves the avatar down, in half canvas heights. Supported range -10 to 10. */
+    pos_y_off?: number;
+    /** Metres the camera backs away from the avatar (negative moves in). Supported range -5 to 5. */
+    pos_z_off?: number;
+    /** Degrees the camera tilts up (pitch). Supported range -180 to 180. */
+    rot_x_off?: number;
+    /** Degrees the camera pans right (yaw). Supported range -180 to 180. */
+    rot_y_off?: number;
+    /** Degrees the camera rolls clockwise. Supported range -180 to 180. */
+    rot_z_off?: number;
+    /** Multiplies the avatar's zoom; 1 is no change. Supported range above 0, up to 4. */
+    zoom?: number;
+    /** Degrees the camera orbits up over the avatar's head (elevation). Supported range -80 to 80. */
+    orbit_x_off?: number;
+    /** Degrees the camera orbits round to its right (azimuth). Supported range -180 to 180. */
+    orbit_y_off?: number;
+}
+
 // Custom event handler types
 interface SimliSessionRequest {
     faceId: string;
-    handleSilence: boolean;
-    maxSessionLength: number;
-    maxIdleTime: number;
+    /** Defaults to true. */
+    handleSilence?: boolean;
+    /** Seconds. Defaults to 3600. */
+    maxSessionLength?: number;
+    /** Seconds. Defaults to 300. */
+    maxIdleTime?: number;
+    /** @deprecated Ignored by the server, every session runs fasttalk. */
     model?: "fasttalk" | "artalk";
+    sessionAggregator?: string | null;
+    /** Defaults to 0. */
+    startFrame?: number;
+    /** Defaults to "pcm16". */
+    audioInputFormat?: string;
+    /**
+     * Width of the streamed video in pixels, Trinity-2 faces only. At least 512,
+     * and with streaming_height one of 1:1, 16:9 or 9:16. Defaults to 768.
+     */
+    streaming_width?: number;
+    /** Height of the streamed video in pixels. See streaming_width. Defaults to 768. */
+    streaming_height?: number;
+    /** Where the avatar sits across the canvas, 0 (left) to 1 (right). Trinity-2 only. Defaults to 0.5. */
+    avatar_position_x?: number;
+    /** Where the avatar sits down the canvas, 0 (top) to 1 (bottom). Trinity-2 only. Defaults to 1. */
+    avatar_position_y?: number;
+    /** The camera the session starts with. Trinity-2 only. Leave it out to keep the avatar's framing. */
+    camera?: CameraSetting | null;
 }
 interface TokenRequestData {
     config: SimliSessionRequest
@@ -56,6 +102,8 @@ interface TokenRequestData {
 
 interface SimliSessionToken {
     session_token: string;
+    /** Starting camera fields outside their supported range. The token is minted regardless. */
+    warnings: string[];
 }
 
 type TransportMode = "livekit" | "p2p"
@@ -368,4 +416,4 @@ class SimliClient {
 }
 
 export { SimliClient, generateSimliSessionToken, generateIceServers, Logger, LogLevel }
-export type { SimliSessionRequest };
+export type { SimliSessionRequest, SimliSessionToken, CameraSetting };
