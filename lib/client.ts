@@ -1,8 +1,8 @@
 // src/index.ts
-import { SimliClientEvents } from './Events';
-import { BaseTransport, EventCallback, EventMap } from './Transports/BaseTransport';
-import { LivekitTransport } from './Transports/LivekitTransport';
-import { P2PTransport } from './Transports/P2PTransport';
+import { SimliClientEvents } from './events';
+import { BaseTransport, EventCallback, EventMap } from './transports/BaseTransport';
+import { LivekitTransport } from './transports/LivekitTransport';
+import { P2PTransport } from './transports/P2PTransport';
 import { Logger, LogLevel } from './Logger';
 
 const AudioProcessor = (buffer: number) => {

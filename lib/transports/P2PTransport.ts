@@ -1,5 +1,5 @@
-import { WebSocketSignaling } from "../Signaling/WebSocketSignaling";
-import { SimliClientEvents } from "../Events";
+import { WebSocketSignaling } from "../signaling/WebSocketSignaling";
+import { SimliClientEvents } from "../events";
 import { BaseTransport, EventCallback, EventMap, handleMessage, register_destination } from "./BaseTransport";
 import { Logger } from "../Logger";
 

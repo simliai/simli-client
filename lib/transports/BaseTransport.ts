@@ -1,6 +1,6 @@
-import { SimliClientEvents } from "../Events";
+import { SimliClientEvents } from "../events";
 import { Logger } from "../Logger";
-import { BaseSignaling } from "../Signaling/BaseSignaling";
+import { BaseSignaling } from "../signaling/BaseSignaling";
 
 type EventCallback = (...args: any[]) => void;
 type EventMap = Map<string, Set<EventCallback>>;

@@ -1,9 +1,9 @@
 export {
     SimliClient, generateSimliSessionToken, generateIceServers, LogLevel
-} from './Client';
+} from './client';
 export type {
     SimliSessionRequest,
     SimliSessionToken,
     CameraSetting,
-} from './Client';
+} from './client';
 
