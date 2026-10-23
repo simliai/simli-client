@@ -1,6 +1,6 @@
 import { Logger } from "../Logger";
 
-type ClientSignals = "DONE" | "SKIP"
+type ClientSignals = "DONE" | "SKIP" | `BG_${string}` | `FG_${string}`
 interface BaseSignaling {
     logger: Logger
     connect(connected: () => void): Promise<void>;

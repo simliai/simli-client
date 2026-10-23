@@ -94,6 +94,18 @@ interface SimliSessionRequest {
     avatar_position_y?: number;
     /** The camera the session starts with. Trinity-2 only. Leave it out to keep the avatar's framing. */
     camera?: CameraSetting | null;
+    /**
+     * One of your uploaded backgrounds, by the id POST /assets/backgrounds returned,
+     * shown behind the avatar and cropped to fill the canvas. Trinity-2 only.
+     * Leave it out for the avatar's own. Change it live with setBackground.
+     */
+    background_id?: string | null;
+    /**
+     * One of your uploaded foregrounds, by the id POST /assets/foregrounds returned,
+     * laid over the avatar through its transparency. Trinity-2 only. Leave it out
+     * for the avatar's own. Change it live with setForeground.
+     */
+    foreground_id?: string | null;
 }
 interface TokenRequestData {
     config: SimliSessionRequest
@@ -102,13 +114,21 @@ interface TokenRequestData {
 
 interface SimliSessionToken {
     session_token: string;
-    /** Starting camera fields outside their supported range. The token is minted regardless. */
+    /**
+     * Starting camera fields outside their supported range, and background_id /
+     * foreground_id dropped as not your account's (the avatar's own is used).
+     * The token is minted regardless.
+     */
     warnings: string[];
 }
 
 type TransportMode = "livekit" | "p2p"
 type SignalingMode = "websockets"
 type session_token = string
+
+const ASSET_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+// No upload has the nil UUID; sent as BG_/FG_ it goes back to the avatar's own.
+const NO_ASSET_ID = "00000000-0000-0000-0000-000000000000"
 
 async function generateSimliSessionToken(
     request: TokenRequestData,
@@ -411,6 +431,35 @@ class SimliClient {
 
     sendAudioDataImmediate(audioData: Uint8Array) {
         this.connection.signalingConnection.sendAudioDataImmediate(audioData);
+    }
+
+    /**
+     * Puts one of your uploaded backgrounds behind the avatar, Trinity-2 faces only,
+     * by the id POST /assets/backgrounds returned; null goes back to the avatar's own.
+     * It applies a moment later, once loaded, and the last one sent wins. A refusal
+     * (not your upload, couldn't load, not Trinity-2) arrives as an "unknown" event.
+     */
+    setBackground(backgroundId: string | null) {
+        this.connection.signalingConnection.sendSignal(`BG_${this.assetId(backgroundId)}`);
+    }
+
+    /**
+     * Lays one of your uploaded foregrounds over the avatar, Trinity-2 faces only,
+     * by the id POST /assets/foregrounds returned; null takes it away. Otherwise as
+     * setBackground.
+     */
+    setForeground(foregroundId: string | null) {
+        this.connection.signalingConnection.sendSignal(`FG_${this.assetId(foregroundId)}`);
+    }
+
+    private assetId(id: string | null): string {
+        if (id === null) {
+            return NO_ASSET_ID
+        }
+        if (!ASSET_ID_PATTERN.test(id)) {
+            throw "Invalid asset id, expected the 36 character id returned by POST /assets"
+        }
+        return id
     }
 
 }
