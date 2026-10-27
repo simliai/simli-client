@@ -119,7 +119,8 @@ class P2PTransport implements BaseTransport {
             this.signalingConnection.sendSignal("DONE")
         }
         catch {
-            this.logger.error("FAILED TO SEND FINAL MESSAGE")
+            // Expected on a normal hang-up, once the websocket is already closed
+            this.logger.debug("FAILED TO SEND FINAL MESSAGE")
         }
         try {
             this.signalingConnection.disconnect()
@@ -138,8 +139,8 @@ class P2PTransport implements BaseTransport {
         if (info.sdp && info.type == "answer") {
             await this.pc.setRemoteDescription(new RTCSessionDescription(info));
         } else {
-            this.disconnect()
-            this.emit("error", "Invalid Join Info, Contact Simli For Support")
+            // Join details this SDK doesn't recognise: before the first frame, start() stops there
+            this.emit("unknown", serialized_info)
         }
     }
 

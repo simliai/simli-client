@@ -43,7 +43,8 @@ const AudioProcessor = (buffer: number) => {
 
 // Camera offsets on top of the avatar's own framing, Trinity-2 faces only.
 // Every field is neutral when left out. A value outside its supported range
-// is still applied, with a warning in the token response.
+// is still applied, with a warning: in the token response for the starting
+// camera, as a "warning" event for setCamera.
 interface CameraSetting {
     /** Moves the avatar right, in half canvas widths. Supported range -10 to 10. */
     pos_x_off?: number;
@@ -129,6 +130,13 @@ type session_token = string
 const ASSET_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 // No upload has the nil UUID; sent as BG_/FG_ it goes back to the avatar's own.
 const NO_ASSET_ID = "00000000-0000-0000-0000-000000000000"
+// The order the server reads CAM_ values in (y before x), each with its neutral
+// value: all of them neutral is the avatar's own framing.
+const CAMERA_FIELDS: [keyof CameraSetting, number][] = [
+    ["pos_y_off", 0], ["pos_x_off", 0], ["pos_z_off", 0], ["zoom", 1],
+    ["rot_x_off", 0], ["rot_y_off", 0], ["rot_z_off", 0],
+    ["orbit_x_off", 0], ["orbit_y_off", 0],
+]
 
 async function generateSimliSessionToken(
     request: TokenRequestData,
@@ -190,14 +198,16 @@ class SimliClient {
     audioElement: HTMLAudioElement
     audioBufferSize: number = 3000
     private connection: BaseTransport
-    private connectionTimeout: NodeJS.Timeout
+    private connectionTimeout?: NodeJS.Timeout
     private connectionResolve: () => void
     private connectionReject: (message: string) => void
     private connectionPromise: Promise<void>
     private sourceNode: MediaStreamAudioSourceNode | null = null;
     private audioWorklet: AudioWorkletNode | null = null;
     private readonly MAX_RETRY_ATTEMPTS = 10;
-    private RETRY_DELAY = 2000;
+    private readonly RETRY_BASE_DELAY_MS = 1000;
+    private readonly RETRY_MAX_DELAY_MS = 16000;
+    private readonly RETRY_JITTER = 0.2;
     private readonly CONNECTION_TIMEOUT_MS = 15000;
     private retryAttempt: number = 0;
     private SimliWSURL: string = "wss://api.simli.ai";
@@ -208,7 +218,12 @@ class SimliClient {
     private logger: Logger;
     private iceServers: RTCIceServer[] | null;
     private persistent_events: EventMap;
+    // Why this attempt can't succeed: start() rejects with it at once
     private failReason: string | null = null;
+    // Why this attempt failed in a way that may pass: start() retries
+    private retryReason: string | null = null;
+    // The first frame is on screen
+    private started: boolean = false;
     private shouldStop: boolean = false;
 
     // Type-safe event methods
@@ -241,7 +256,7 @@ class SimliClient {
         audioElement: HTMLAudioElement,
         iceServers: RTCIceServer[] | null,
         logLevel: LogLevel = LogLevel.DEBUG,
-        transport_mode: TransportMode = "p2p",
+        transport_mode: TransportMode = "livekit",
         signaling: SignalingMode = "websockets",
         SimliWSURL: string = "wss://api.simli.ai",
         audioBufferSize: number = 3000,
@@ -276,7 +291,6 @@ class SimliClient {
         this.connectionResolve = resolveFn!;
         this.connectionReject = rejectFn!;
         this.persistent_events = new Map()
-        this.connectionTimeout = setTimeout(() => this.connectionReject("CONNECTION TIMED OUT"), this.CONNECTION_TIMEOUT_MS)
 
         switch (this.transport) {
             case "livekit":
@@ -292,17 +306,45 @@ class SimliClient {
                 throw new Error("Not Implemented Yet")
 
         }
+        this.watchConnection()
+    }
+
+    // Ties this attempt's connection to start(). The first frame resolves it. A server error,
+    // or a message this SDK doesn't know before that frame, rejects it for good. The websocket
+    // failing or dropping, or no first frame within CONNECTION_TIMEOUT_MS, rejects it for a retry.
+    private watchConnection() {
+        this.connectionTimeout = setTimeout(() => {
+            this.retryReason = "Connection Timed Out"
+            this.connectionReject(this.retryReason)
+        }, this.CONNECTION_TIMEOUT_MS)
         this.connection.on("start", () => {
+            this.started = true
             this.connectionResolve()
             clearTimeout(this.connectionTimeout)
         })
-        this.connection.on("unknown", (message) => this.logger.debug("UNKOWN MESSAGE FROM SERVER: " + message))
+        // The transport rejects connectionPromise for it itself (failSignal)
+        this.connection.on("startup_error", (message) => { this.retryReason = message })
         this.connection.on("error", (message) => { this.failReason = message; this.connectionReject(message) })
-
+        this.connection.on("warning", (message) => this.logger.warn("SERVER WARNING: " + message))
+        this.connection.on("unknown", (message) => {
+            if (this.started) {
+                // The session goes on
+                this.logger.warn("Unknown message from Simli: " + message)
+                return
+            }
+            // Before the first frame it may be an error this SDK doesn't know: stop, don't retry
+            this.logger.error("Unknown error from Simli: " + message)
+            this.failReason = message
+            this.connection.disconnect()
+            this.connectionReject(message)
+        })
     }
 
     private resetConnections(videoElement: HTMLVideoElement, audioElement: HTMLAudioElement, iceServers: RTCIceServer[] | null) {
         this.failReason = null
+        this.retryReason = null
+        // The failed attempt's timer would otherwise fire into this attempt's connectionReject
+        clearTimeout(this.connectionTimeout)
         let resolveFn: () => void;
         let rejectFn: () => void;
 
@@ -313,7 +355,6 @@ class SimliClient {
 
         this.connectionResolve = resolveFn!;
         this.connectionReject = rejectFn!;
-        this.connectionTimeout = setTimeout(() => this.connectionReject("Connection Timed Out"), this.CONNECTION_TIMEOUT_MS)
 
         switch (this.transport) {
             case "livekit":
@@ -329,12 +370,7 @@ class SimliClient {
                 throw new Error("Not Implemented Yet")
 
         }
-        this.connection.on("start", () => {
-            this.connectionResolve()
-            clearTimeout(this.connectionTimeout)
-        })
-        this.connection.on("error", (message) => { this.retryAttempt = this.MAX_RETRY_ATTEMPTS; this.connectionReject(message) })
-        this.connection.on("unknown", (message) => this.logger.debug("UNKOWN MESSAGE FROM SERVER: " + message))
+        this.watchConnection()
         // Re-register all user event handlers on the new connection
         this.persistent_events.forEach((callbacks, event) => {
             callbacks.forEach((callback) => {
@@ -351,7 +387,17 @@ class SimliClient {
             await this.connectionPromise
             this.retryAttempt = 0
         } catch (error) {
+            // The server refused the session ("error" event), or sent a message this SDK doesn't
+            // know before the first frame ("unknown"): retrying can't help, and its reason beats
+            // whatever rejected first.
             if (this.failReason) {
+                throw this.failReason
+            }
+            // Only failures that may pass are retried: the websocket failing to open or dropping
+            // ("startup_error"), and an attempt timing out. Anything else rejects at once, as is.
+            if (this.retryReason === null && !this.shouldStop) {
+                this.logger.error("Unknown error from Simli: " + error)
+                await this.connection.disconnect()
                 throw error
             }
             if (this.retryAttempt >= this.MAX_RETRY_ATTEMPTS)
@@ -362,13 +408,22 @@ class SimliClient {
             }
             this.logger.error("FAILED: " + error)
             await this.connection.disconnect()
-            await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+            const delay = this.retryDelayMs(this.retryAttempt + 1)
+            this.logger.info(`Retry ${this.retryAttempt + 1} of ${this.MAX_RETRY_ATTEMPTS} in ${Math.round(delay)} ms`)
+            await new Promise(resolve => setTimeout(resolve, delay));
             this.retryAttempt += 1
             if (this.retryAttempt > 2)
                 this.transport = "livekit"
             this.resetConnections(this.videoElement, this.audioElement, this.iceServers)
             await this.start()
         }
+    }
+
+    // Before retry n (1, 2, ...): RETRY_BASE_DELAY_MS doubling up to RETRY_MAX_DELAY_MS, so
+    // 1, 2, 4, 8, 16, 16 ... s, plus up to RETRY_JITTER more so clients don't retry in lockstep
+    private retryDelayMs(n: number): number {
+        const delay = Math.min(this.RETRY_BASE_DELAY_MS * 2 ** (n - 1), this.RETRY_MAX_DELAY_MS)
+        return delay * (1 + this.RETRY_JITTER * Math.random())
     }
 
     async stop() {
@@ -437,7 +492,7 @@ class SimliClient {
      * Puts one of your uploaded backgrounds behind the avatar, Trinity-2 faces only,
      * by the id POST /assets/backgrounds returned; null goes back to the avatar's own.
      * It applies a moment later, once loaded, and the last one sent wins. A refusal
-     * (not your upload, couldn't load, not Trinity-2) arrives as an "unknown" event.
+     * (not your upload, couldn't load, not Trinity-2) arrives as a "warning" event.
      */
     setBackground(backgroundId: string | null) {
         this.connection.signalingConnection.sendSignal(`BG_${this.assetId(backgroundId)}`);
@@ -450,6 +505,31 @@ class SimliClient {
      */
     setForeground(foregroundId: string | null) {
         this.connection.signalingConnection.sendSignal(`FG_${this.assetId(foregroundId)}`);
+    }
+
+    /**
+     * Moves the camera, Trinity-2 faces only: offsets on top of the avatar's own
+     * framing. Each call replaces the whole camera, the session's starting one
+     * included, so a field left out is neutral and null goes back to the avatar's
+     * own framing. It cuts, unless lerpSeconds is above 0: then it glides there over
+     * that many seconds, from wherever the camera is now. A value outside its
+     * supported range is applied all the same, with a "warning" event; a refusal
+     * (not Trinity-2) arrives as one too. Throws on a value that isn't a finite number.
+     */
+    setCamera(camera: CameraSetting | null, options: { lerpSeconds?: number } = {}) {
+        const values = CAMERA_FIELDS.map(([field, neutral]) => this.cameraNumber(field, camera?.[field] ?? neutral))
+        // Given, it goes on the wire as is, 0 or less included (a cut), as the Python SDK sends it
+        const lerpSeconds = options.lerpSeconds ?? null
+        this.connection.signalingConnection.sendCamera(values, lerpSeconds === null ? null : this.cameraNumber("lerpSeconds", lerpSeconds))
+    }
+
+    // Sent as float32: NaN, infinity and numbers too big for one would have the
+    // server refuse the whole camera, so they are refused here, where it's clear why.
+    private cameraNumber(name: string, value: number): number {
+        if (typeof value !== "number" || !Number.isFinite(Math.fround(value))) {
+            throw `Invalid camera ${name} ${value}, expected a finite number`
+        }
+        return value
     }
 
     private assetId(id: string | null): string {

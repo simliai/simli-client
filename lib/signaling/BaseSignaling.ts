@@ -8,5 +8,6 @@ interface BaseSignaling {
     sendSignal(data: ClientSignals): void;
     sendAudioData(audioData: Uint8Array): void;
     sendAudioDataImmediate(audioData: Uint8Array): void;
+    sendCamera(values: number[], lerpSeconds: number | null): void;
 }
 export type { BaseSignaling, ClientSignals }

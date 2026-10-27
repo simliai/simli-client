@@ -31,6 +31,17 @@ interface BaseTransport {
 
 }
 
+// The server's replies to CAM_, BG_ and FG_ (camera_notice and asset_notice in its
+// asyncapi): applied with a warning, or ignored. None of them end the session.
+const NOTICES = [
+    /^WARNING: /,
+    /^Invalid camera override received$/,
+    /^Selected model does not support (camera overrides|a custom (background|foreground))$/,
+    /^Invalid (background|foreground) message: /,
+    /^(background|foreground) .+ is not one of your uploaded (backgrounds|foregrounds), ignoring$/,
+    /^Couldn't load (background|foreground) .+, ignoring$/,
+]
+
 function register_destination(logger: Logger, serialized_info: string) {
     const parsed = JSON.parse(serialized_info)
     logger.destination = parsed.destination
@@ -58,6 +69,7 @@ async function handleMessage(transport: BaseTransport, message: MessageEvent): P
         case "ERROR:": {
             transport.disconnect()
             transport.emit("error", message.data as string)
+            break
         }
         case "SPEAK": {
             transport.emit("speaking");
@@ -77,6 +89,8 @@ async function handleMessage(transport: BaseTransport, message: MessageEvent): P
                 transport.disconnect()
             } else if (firstToken.includes("DESTINATION")) {
                 transport.emit("destination", message.data)
+            } else if (NOTICES.some((notice) => notice.test(message.data))) {
+                transport.emit("warning", message.data)
             } else {
                 transport.emit("unknown", message.data)
             }

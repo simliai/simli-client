@@ -53,6 +53,14 @@ export class Logger {
         this.log(LogLevel.INFO, 'INFO', message, ...args);
     }
 
+    // Shown from LogLevel.INFO down, as there's no level between INFO and ERROR, on console.warn
+    public warn(message: string, ...args: any[]): void {
+        if (LogLevel.INFO < this.currentLevel) {
+            return;
+        }
+        console.warn(this.formatMessage('WARN', message), ...args);
+    }
+
     public error(message: string, ...args: any[]): void {
         this.log(LogLevel.ERROR, 'ERROR', message, ...args);
     }

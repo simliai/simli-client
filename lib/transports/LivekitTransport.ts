@@ -97,7 +97,8 @@ class LivekitTransport implements BaseTransport {
             this.signalingConnection.sendSignal("DONE")
         }
         catch {
-            this.logger.error("FAILED TO SEND FINAL MESSAGE")
+            // Expected on a normal hang-up, once the websocket is already closed
+            this.logger.debug("FAILED TO SEND FINAL MESSAGE")
         }
         try {
             this.signalingConnection.disconnect()
@@ -116,10 +117,18 @@ class LivekitTransport implements BaseTransport {
         const info = JSON.parse(serialized_info)
         this.logger.debug(info)
         if (info.livekit_url && info.livekit_token) {
-            await this.pc.connect(info.livekit_url, info.livekit_token);
+            try {
+                await this.pc.connect(info.livekit_url, info.livekit_token);
+            } catch (error) {
+                // A connection failure, like the websocket's: start() retries now, rather
+                // than once its timeout runs out
+                const reason = "LiveKit join failed: " + error
+                this.logger.error(reason)
+                this.emit("startup_error", reason)
+            }
         } else {
-            this.disconnect()
-            this.emit("error", "Invalid Join Info, Contact Simli For Support")
+            // Join details this SDK doesn't recognise: before the first frame, start() stops there
+            this.emit("unknown", serialized_info)
         }
     }
     private setupConnectionStateHandler() {
