@@ -202,8 +202,9 @@ class SimliClient {
     private connectionResolve: () => void
     private connectionReject: (message: string) => void
     private connectionPromise: Promise<void>
-    private sourceNode: MediaStreamAudioSourceNode | null = null;
+    private sourceNode: AudioNode | null = null;
     private audioWorklet: AudioWorkletNode | null = null;
+    private audioSendFailing = false;
     private readonly MAX_RETRY_ATTEMPTS = 10;
     private readonly RETRY_BASE_DELAY_MS = 1000;
     private readonly RETRY_MAX_DELAY_MS = 16000;
@@ -324,7 +325,9 @@ class SimliClient {
         })
         // The transport rejects connectionPromise for it itself (failSignal)
         this.connection.on("startup_error", (message) => { this.retryReason = message })
-        this.connection.on("error", (message) => { this.failReason = message; this.connectionReject(message) })
+        this.connection.on("error", (message) => { this.failReason = message; this.connectionReject(message); this.detachAudio() })
+        // The session is over (Simli sent STOP or ENDFRAME): stop streaming listen* audio into it.
+        this.connection.on("stop", () => this.detachAudio())
         this.connection.on("warning", (message) => this.logger.warn("SERVER WARNING: " + message))
         this.connection.on("unknown", (message) => {
             if (this.started) {
@@ -428,7 +431,30 @@ class SimliClient {
 
     async stop() {
         this.shouldStop = true
+        // Detach the listen* worklet first, so it stops sending into the closing socket.
+        this.detachAudio()
         await this.connection.disconnect()
+        // The client can't be started again, so its audio context can go too.
+        this.audioContext.close().catch(() => { })
+    }
+
+    /** Disconnects the listenToMediastreamTrack / listenToAudioElement audio graph, if any. */
+    private detachAudio() {
+        try {
+            this.sourceNode?.disconnect()
+        } catch {
+            // already disconnected
+        }
+        if (this.audioWorklet) {
+            this.audioWorklet.port.onmessage = null
+            try {
+                this.audioWorklet.disconnect()
+            } catch {
+                // already disconnected
+            }
+        }
+        this.sourceNode = null
+        this.audioWorklet = null
     }
 
     listenToMediastreamTrack(stream: MediaStreamTrack) {
@@ -441,6 +467,7 @@ class SimliClient {
 
     listenToAudioElement(audioEl: HTMLAudioElement) {
         const source = this.audioContext.createMediaElementSource(audioEl);
+        this.sourceNode = source;
         // No connection to audioContext.destination on purpose: createMediaElementSource
         // reroutes the element's audio into the graph, so leaving the destination
         // unconnected silences the <audio> while samples still flow to Simli.
@@ -460,6 +487,8 @@ class SimliClient {
                 ),
             )
             .then(() => {
+                // stop() may have run while the module was loading.
+                if (this.shouldStop) return;
                 this.audioWorklet = new AudioWorkletNode(
                     audioContext,
                     "audio-processor",
@@ -469,8 +498,15 @@ class SimliClient {
                 }
                 source.connect(this.audioWorklet);
                 this.audioWorklet.port.onmessage = (event) => {
-                    if (event.data.type === "audioData") {
+                    if (event.data.type !== "audioData" || this.shouldStop) return;
+                    try {
                         this.connection.signalingConnection.sendAudioData(new Uint8Array(event.data.data.buffer));
+                        this.audioSendFailing = false;
+                    } catch (err) {
+                        // The connection isn't open: still connecting, retrying, or gone without a
+                        // STOP. Drop this chunk instead of throwing on every one, and say so once.
+                        if (!this.audioSendFailing) this.logger.warn(`Dropping audio until the connection is open: ${err}`);
+                        this.audioSendFailing = true;
                     }
                 };
             })
